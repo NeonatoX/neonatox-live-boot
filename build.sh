@@ -647,6 +647,7 @@ fi
 # ----------------------------------------------------------
 MKINITRAMFS=""
 for candidate in \
+    "$SCRIPT_DIR/neonatox-mkinitramfs/src/mkinitramfs" \
     "$SCRIPT_DIR/../neonatox-mkinitramfs/src/mkinitramfs" \
     /usr/sbin/mkinitramfs \
     /usr/bin/mkinitramfs; do
@@ -658,7 +659,7 @@ done
 
 if [ -z "$MKINITRAMFS" ]; then
     echo -e "${RED}[ERROR]${NC} mkinitramfs not found"
-    echo "Expected at $SCRIPT_DIR/../neonatox-mkinitramfs/src/mkinitramfs"
+    echo "Expected at $SCRIPT_DIR/neonatox-mkinitramfs/src/mkinitramfs"
     echo "or installed system-wide (neonatox-mkinitramfs)"
     exit 1
 fi
