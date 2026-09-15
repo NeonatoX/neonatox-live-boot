@@ -1,0 +1,29 @@
+#!/bin/sh
+INITRAMFS=""
+LIST=no
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -l|--list) LIST=yes; shift ;;
+    -h|--help) echo "Usage: $0 -l <initramfs>"; exit 0 ;;
+    -*) shift ;;
+    *) INITRAMFS="$1"; shift ;;
+  esac
+done
+
+[ -z "$INITRAMFS" ] && { echo "Usage: $0 -l <initramfs>"; exit 1; }
+[ -f "$INITRAMFS" ] || { echo "Not found: $INITRAMFS"; exit 1; }
+
+TMP=$(mktemp /tmp/lsinitramfs.XXXXXX)
+
+case "$(file -b "$INITRAMFS")" in
+  *Zstandard*) zstd -d -c "$INITRAMFS" > "$TMP" ;;
+  *XZ*)        xz -d -c "$INITRAMFS" > "$TMP" ;;
+  *gzip*)      gzip -d -c "$INITRAMFS" > "$TMP" ;;
+  *)          echo "$0: Unknown format"; rm -f "$TMP"; exit 1 ;;
+esac
+
+if [ "$LIST" = "yes" ]; then
+  cpio -it < "$TMP"
+fi
+rm -f "$TMP"

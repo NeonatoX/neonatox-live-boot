@@ -1,0 +1,35 @@
+#!/bin/sh
+# Hook: plymouth splash support
+# Install this to /usr/share/mkinitramfs/hooks/pre-binaries/50-plymouth
+
+WDIR="$1"
+[ -z "$WDIR" ] && exit 1
+
+# Check if plymouth is enabled in config
+SPLASH="${SPLASH:-none}"
+[ "$SPLASH" = "none" ] && exit 0
+
+case "$SPLASH" in
+  plymouth)
+    # Copy plymouth binaries
+    for bin in plymouth plymouthd; do
+      if [ -x "/usr/sbin/$bin" ]; then
+        cp "/usr/sbin/$bin" "$WDIR/usr/sbin/"
+        # Copy dependencies
+        ldd "/usr/sbin/$bin" 2>/dev/null | sed 's/\t//' | cut -d' ' -f1 | while read lib; do
+          case "$lib" in
+            ""|linux-vdso.so.1|linux-gate.so.1) continue ;;
+          esac
+          [ -f "$lib" ] && cp "$lib" "$WDIR/lib/" 2>/dev/null || true
+        done
+      fi
+    done
+
+    # Copy plymouth themes
+    if [ -d /usr/share/plymouth ]; then
+      cp -a /usr/share/plymouth "$WDIR/usr/share/"
+    fi
+    ;;
+esac
+
+exit 0
