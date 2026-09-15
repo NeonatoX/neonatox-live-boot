@@ -1,0 +1,526 @@
+#!/bin/bash
+
+usage() {
+  cat <<EOF
+Uso: $0 [opciones]
+Opciones:
+  -k, --kernel VER      Versión del kernel (por defecto: \$(uname -r))
+  -r, --release STR     Sufijo de release (por defecto: empty)
+  -c, --compress FORMAT Compresión: gz, xz, zstd (por defecto: zstd)
+  -p, --profile PROFILE Perfil: disk, live, netinstall (por defecto: disk)
+  -o, --output FILE     Ruta de salida (por defecto: /boot/initrd-*)
+  --tools-dir DIR       Directorio con binarios estáticos (busybox; obligatorio live/netinstall, opcional disk)
+  --staging DIR         Directorio de trabajo temporal
+  --neonatox-dir DIR    Ruta a neonatox-live-boot (lib/ + libexec/)
+  --hooks-dir DIR       Directorio adicional de hooks (proyecto)
+   --xz-extreme          Usar compresión xz --extreme
+   --decompress-kernel-modules  Descomprimir .ko.zst/.ko.gz/.ko.xz (default: skip — kernel las carga directamente)
+  -h, --help            Muestra esta ayuda
+EOF
+  exit 0
+}
+
+KERNEL_VERSION=$(uname -r)
+RELEASE=""
+ARCH=$(uname -m)
+COMPRESS="zstd"
+PROFILE="disk"
+CUSTOM_OUTPUT=""
+TOOLS_DIR=""
+CUSTOM_STAGING=""
+NEONATOX_DIR=""
+CUSTOM_HOOKDIR=""
+XZ_EXTREME=false
+DECOMPRESS_MODULES=true
+
+# Config cargada ANTES de parsear args: --tools-dir/etc. de la CLI mandan
+if [ -f /etc/mkinitramfs.conf ]; then
+  . /etc/mkinitramfs.conf
+fi
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -k|--kernel)
+      KERNEL_VERSION="$2"; shift 2 ;;
+    -r|--release)
+      RELEASE="$2"; shift 2 ;;
+    -c|--compress)
+      COMPRESS="$2"; shift 2 ;;
+    -p|--profile)
+      PROFILE="$2"; shift 2 ;;
+    -o|--output)
+      CUSTOM_OUTPUT="$2"; shift 2 ;;
+    --tools-dir)
+      TOOLS_DIR="$2"; shift 2 ;;
+    --staging)
+      CUSTOM_STAGING="$2"; shift 2 ;;
+    --neonatox-dir)
+      NEONATOX_DIR="$2"; shift 2 ;;
+    --hooks-dir)
+      CUSTOM_HOOKDIR="$2"; shift 2 ;;
+    --xz-extreme)
+      XZ_EXTREME=true; shift ;;
+    --decompress-kernel-modules)
+      DECOMPRESS_MODULES=true; shift ;;
+    -h|--help)
+      usage ;;
+    *)
+      echo "Opción desconocida: $1"
+      usage
+      exit 1 ;;
+  esac
+done
+
+case "$PROFILE" in
+  disk|live|netinstall) ;;
+  *) echo "Error: perfil '$PROFILE' no válido (disk, live, netinstall)"; exit 1 ;;
+esac
+
+if [ -n "$KERNEL_VERSION" ] && [ ! -d "/usr/lib/modules/$KERNEL_VERSION" ]; then
+  echo "Error: No existe /usr/lib/modules/$KERNEL_VERSION"
+  exit 1
+fi
+
+case "$COMPRESS" in
+  gz|xz|zstd) ;;
+  *) echo "Error: compresión '$COMPRESS' no soportada. Use: gz, xz, zstd"; exit 1 ;;
+esac
+
+if [ "$PROFILE" != "disk" ]; then
+  if [ -z "$NEONATOX_DIR" ]; then
+    for d in /usr/share/neonatox-boot /usr/local/share/neonatox-boot; do
+      [ -d "$d" ] && { NEONATOX_DIR="$d"; break; }
+    done
+  fi
+  if [ -z "$NEONATOX_DIR" ] || [ ! -f "$NEONATOX_DIR/init" ]; then
+    echo "Error: --neonatox-dir requerido para perfil '$PROFILE' (no se encontró init)"
+    exit 1
+  fi
+fi
+
+INITRAMFS_FILE="${CUSTOM_OUTPUT:-/boot/initrd-${KERNEL_VERSION}-${ARCH}${RELEASE:+-${RELEASE}}}"
+
+SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [ -f "$SELF_DIR/../data/init.in" ] && [ -d "$SELF_DIR/../data/hooks" ]; then
+  # Uso en-tree (repositorio/subtree): data/ junto al script
+  DATADIR=$(cd "$SELF_DIR/../data" && pwd)
+  INITIN=init.in
+  HOOKDIR="$DATADIR/hooks"
+else
+  # Instalación de sistema via meson
+  DATADIR=/usr/share/mkinitramfs
+  INITIN=init.in
+  HOOKDIR=/usr/share/mkinitramfs/hooks
+fi
+
+: "${COMPRESSION:=zstd}"
+: "${SPLASH:=none}"
+
+if [ -n "$CUSTOM_STAGING" ]; then
+  WDIR="$CUSTOM_STAGING"
+  rm -rf "$WDIR"
+  mkdir -p "$WDIR"
+else
+  WDIR=$(mktemp -d /tmp/initrd-work.XXXXXXXXXX)
+fi
+unsorted=$(mktemp /tmp/unsorted.XXXXXXXXXX)
+
+run_hooks() {
+  local phase="$1"
+  for dir in "$HOOKDIR/$phase" ${CUSTOM_HOOKDIR:+"$CUSTOM_HOOKDIR/$phase"}; do
+    [ -d "$dir" ] || continue
+    for hook in "$dir"/*; do
+      [ -x "$hook" ] || continue
+      TOOLS_DIR="$TOOLS_DIR" NEONATOX_DIR="$NEONATOX_DIR" PROFILE="$PROFILE" \
+        "$hook" "$WDIR" || { echo "Hook $hook falló"; return 1; }
+    done
+  done
+}
+
+# ----------------------------------------------------------
+# ESTRUCTURA BÁSICA
+# ----------------------------------------------------------
+mkdir -p $WDIR/{dev,run,sys,proc,tmp,var/lock,usr/{bin,lib/{firmware,modules},sbin}}
+mkdir -p $WDIR/etc/{modprobe.d,udev/rules.d}
+mkdir -p $WDIR/mnt/{iso,iso_test,newroot,ram,ro_root}
+touch $WDIR/etc/modprobe.d/modprobe.conf
+ln -s usr/bin  $WDIR/bin
+ln -s usr/lib  $WDIR/lib
+ln -s usr/sbin $WDIR/sbin
+ln -s lib      $WDIR/lib64
+
+mknod -m 640 $WDIR/dev/console c 5 1
+mknod -m 664 $WDIR/dev/null    c 1 3
+
+if [ -d /etc/modprobe.d ]; then
+  cp -a /etc/modprobe.d/* $WDIR/etc/modprobe.d 2>/dev/null || true
+fi
+
+if [ -f /etc/udev/udev.conf ]; then
+  cp /etc/udev/udev.conf $WDIR/etc/udev/udev.conf
+fi
+for file in $(find /etc/udev/rules.d/ -type f 2>/dev/null); do
+  cp "$file" $WDIR/etc/udev/rules.d 2>/dev/null || true
+done
+
+# LVM config (solo perfil disk)
+if [ "$PROFILE" = "disk" ] && [ -x /usr/sbin/lvm ]; then
+  cp -a /etc/lvm $WDIR/etc 2>/dev/null || true
+fi
+
+# ----------------------------------------------------------
+# INIT + LIBRARIES
+# ----------------------------------------------------------
+if [ "$PROFILE" = "disk" ]; then
+  install -m0755 "$DATADIR/$INITIN" "$WDIR/init"
+else
+  install -m0755 "$NEONATOX_DIR/init" "$WDIR/init"
+  cp -r "$NEONATOX_DIR/lib" "$WDIR/usr/"
+  cp -r "$NEONATOX_DIR/libexec" "$WDIR/"
+  chmod 0755 "$WDIR/libexec"/* 2>/dev/null || true
+fi
+
+run_hooks pre-binaries
+
+# ----------------------------------------------------------
+# BINARIOS POR PERFIL
+# ----------------------------------------------------------
+case "$PROFILE" in
+  disk)
+    binfiles="sh cat cp dd killall ls mkdir mknod mount umount sed sleep ln rm uname readlink basename"
+    [ -x /usr/bin/udevadm ] && binfiles="$binfiles udevadm"
+
+    sbinfiles="modprobe blkid switch_root"
+    for f in mdadm mdmon udevd udevadm; do
+      [ -x /usr/sbin/$f ] && sbinfiles="$sbinfiles $f"
+    done
+    [ -x /usr/sbin/lvm ] && sbinfiles="$sbinfiles lvm dmsetup"
+    ;;
+  live|netinstall)
+    binfiles="sh cat cp dd ls mkdir mount umount sed sleep ln rm uname readlink basename"
+    sbinfiles="modprobe switch_root"
+    # mdev en lugar de udevd
+    ;;
+esac
+
+copy() {
+  local file
+  if [ "$2" = "lib" ]; then
+    file=$(PATH=/usr/lib type -p "$1")
+  else
+    file=$(type -p "$1")
+  fi
+  if [ -n "$file" ]; then
+    cp "$file" "$WDIR/usr/$2"
+  else
+    echo "Error: no se encontró $1 para copiar a /usr/$2"
+    rm -rf "$WDIR"
+    exit 1
+  fi
+}
+
+# ----------------------------------------------------------
+# SELECCIÓN DE BUSYBOX
+# live/netinstall: busybox obligatorio (error si falta, nunca glibc)
+# disk: TOOLS_DIR/busybox → busybox de PATH (estático + applets críticos) → glibc
+# ----------------------------------------------------------
+BB_BIN=""
+CRITICAL_APPLETS="switch_root mount umount mkdir mknod sh cat killall sleep modprobe"
+
+# Usa el busybox del PATH solo si es estático y trae los applets que el
+# init de disk (data/init.in) y udev necesitan en runtime.
+pick_path_busybox() {
+    local bb missing=""
+    bb=$(command -v busybox 2>/dev/null) || return 1
+    file "$bb" 2>/dev/null | grep -q "statically linked" || return 1
+    for app in $CRITICAL_APPLETS; do
+        "$bb" --list 2>/dev/null | grep -qx "$app" || missing="$missing $app"
+    done
+    [ -n "$missing" ] && return 1
+    BB_BIN="$bb"
+}
+
+case "$PROFILE" in
+    live|netinstall)
+        [ -n "$TOOLS_DIR" ] && [ -f "$TOOLS_DIR/busybox" ] && BB_BIN="$TOOLS_DIR/busybox"
+        if [ -z "$BB_BIN" ]; then
+            echo "Error: el perfil $PROFILE requiere busybox en --tools-dir" >&2
+            echo "Ejecute ./build-tools.sh --busybox o use un release de tools" >&2
+            rm -rf "$WDIR"
+            exit 1
+        fi
+        ;;
+    disk)
+        [ -n "$TOOLS_DIR" ] && [ -f "$TOOLS_DIR/busybox" ] && BB_BIN="$TOOLS_DIR/busybox"
+        if [ -z "$BB_BIN" ]; then
+            pick_path_busybox || true
+        fi
+        ;;
+esac
+
+# ----------------------------------------------------------
+# BUSYBOX + symlinks de applets (cualquier perfil con busybox)
+# MUST come before ldd blocks so el fallback glibc solo corre sin busybox
+# ----------------------------------------------------------
+if [ -n "$BB_BIN" ]; then
+  install -m0755 "$BB_BIN" "$WDIR/usr/bin/busybox"
+  ( cd "$WDIR/usr/bin" && ./busybox --list 2>/dev/null | \
+    grep -v "^init$" | grep -v "^poweroff$" | grep -v "^reboot$" | \
+    { [ ! -f /usr/share/hwdata/pci.ids ] && grep -v "^lspci$" || cat; } | \
+    while read -r app; do
+      [ "$app" = "busybox" ] && continue
+      ln -sf busybox "$app"
+    done
+  )
+  # lspci wrapper + pci.ids database (solo si existe en host y en el proyecto)
+  if [ -n "$NEONATOX_DIR" ] && [ -f /usr/share/hwdata/pci.ids ] && [ -f "$NEONATOX_DIR/lspci" ]; then
+    install -D /usr/share/hwdata/pci.ids "$WDIR/usr/share/hwdata/pci.ids"
+    install -m 0755 "$NEONATOX_DIR/lspci" "$WDIR/usr/bin/lspci"
+  fi
+  # Si bash está presente en PROFILE_REQUIRES, usarlo como sh
+  [ -x "$WDIR/usr/bin/bash" ] && ln -sf bash "$WDIR/usr/bin/sh"
+fi
+
+# PROFILE_REQUIRES: tools estáticas (live/netinstall)
+if [ "$PROFILE" != "disk" ]; then
+  case "$PROFILE" in
+    netinstall) PROFILE_LIB="$NEONATOX_DIR/lib/init-net.sh" ;;
+    *)          PROFILE_LIB="$NEONATOX_DIR/lib/init-${PROFILE}.sh" ;;
+  esac
+  if [ -f "$PROFILE_LIB" ]; then
+    REQUIRES=$(grep '^PROFILE_REQUIRES=' "$PROFILE_LIB" | cut -d'"' -f2)
+    for tool in $REQUIRES; do
+      if [ -n "$TOOLS_DIR" ] && [ -f "$TOOLS_DIR/$tool" ]; then
+        install -m0755 "$TOOLS_DIR/$tool" "$WDIR/usr/bin/$tool"
+      fi
+    done
+  fi
+fi
+
+# ldd en musl es un wrapper (exec /lib/libc.so --list $@) que puede colgarse
+# con binarios glibc o estáticos. Con busybox se salta; solo llega aquí
+# el perfil disk sin busybox utilizable (fallback glibc clásico).
+if [ -z "$BB_BIN" ]; then
+for f in $binfiles; do
+  [ -x "/usr/bin/$f" ] || continue
+  ldd "/usr/bin/$f" | sed 's/\t//' | cut -d' ' -f1 >> "$unsorted"
+  copy "/usr/bin/$f" bin
+done
+
+for f in $sbinfiles; do
+  cmd=$(type -p "$f")
+  [ -n "$cmd" ] || continue
+  ldd "$cmd" | sed 's/\t//' | cut -d' ' -f1 >> "$unsorted"
+  copy "$cmd" sbin
+done
+fi
+
+# Binarios de udev/systemd (solo perfil disk, sin busybox)
+if [ -z "$BB_BIN" ] && [ "$PROFILE" = "disk" ]; then
+  if [ -x /usr/lib/udev/udevd ]; then
+    ldd /usr/lib/udev/udevd | sed 's/\t//' | cut -d' ' -f1 >> "$unsorted"
+  elif [ -x /usr/lib/systemd/systemd-udevd ]; then
+    ldd /usr/lib/systemd/systemd-udevd | sed 's/\t//' | cut -d' ' -f1 >> "$unsorted"
+  fi
+fi
+
+# Binarios reales retenidos en modo busybox (perfil disk): udev/lvm/mdadm
+# no tienen applet busybox → se copian del sistema junto a sus libs.
+if [ -n "$BB_BIN" ] && [ "$PROFILE" = "disk" ]; then
+  for f in udevadm mdadm mdmon udevd lvm dmsetup; do
+    cmd=$(type -p "$f" 2>/dev/null) || continue
+    ldd "$cmd" | sed 's/\t//' | cut -d' ' -f1 >> "$unsorted"
+    case "$cmd" in
+      /usr/bin/*) copy "$cmd" bin ;;
+      *)          copy "$cmd" sbin ;;
+    esac
+  done
+  # libs de los ejecutables de los árboles udev/systemd/elogind del host
+  for d in /usr/lib/udev /usr/lib/systemd /usr/lib/elogind; do
+    [ -d "$d" ] || continue
+    find "$d" -maxdepth 2 -type f -perm -u+x -print0 2>/dev/null | \
+      while IFS= read -r -d '' exe; do
+        ldd "$exe" 2>/dev/null | sed 's/\t//' | cut -d' ' -f1 >> "$unsorted"
+      done
+  done
+fi
+
+# Symlinks LVM (perfil disk; lvm no tiene applet, con o sin busybox)
+if [ "$PROFILE" = "disk" ] && [ -x /usr/sbin/lvm ]; then
+  for cmd in lvchange lvrename lvextend lvcreate lvdisplay lvscan \
+             pvchange pvck pvcreate pvdisplay pvscan \
+             vgchange vgcreate vgrename vgscan vgck; do
+    ln -sf lvm $WDIR/usr/sbin/$cmd
+  done
+fi
+
+# Symlinks kmod (solo cuando NO usamos busybox: busybox ya provee modprobe/insmod/lsmod)
+if [ -z "$BB_BIN" ]; then
+  if [ -n "$KERNEL_VERSION" ] && [ -x /usr/bin/kmod ]; then
+    binfiles="$binfiles kmod"
+    ln -sf kmod $WDIR/usr/bin/lsmod
+    ln -sf kmod $WDIR/usr/bin/insmod
+  else
+    binfiles="$binfiles lsmod"
+    sbinfiles="$sbinfiles insmod"
+  fi
+fi
+
+# Bibliotecas únicas (vale para ambas ramas: glibc completa o solo las retenidas)
+# libsystemd-{shared,core} viajan con el árbol /usr/lib/systemd copiado completo (rpath $ORIGIN/../systemd)
+sort "$unsorted" | uniq | while read lib; do
+  case "$lib" in
+    ""|linux-vdso.so.1|linux-gate.so.1|libsystemd-shared*|libsystemd-core*) continue ;;
+  esac
+  copy "$lib" lib
+done
+
+# udev/systemd (solo perfil disk)
+if [ "$PROFILE" = "disk" ]; then
+  [ -d /usr/lib/udev ]   && cp -a /usr/lib/udev   $WDIR/usr/lib
+  [ -d /usr/lib/systemd ] && cp -a /usr/lib/systemd $WDIR/usr/lib
+  [ -d /usr/lib/elogind ] && cp -a /usr/lib/elogind $WDIR/usr/lib
+fi
+
+# Configuración RAID (solo perfil disk)
+if [ "$PROFILE" = "disk" ] && [ -f /etc/mdadm.conf ]; then
+  cp /etc/mdadm.conf $WDIR/etc
+fi
+
+# ----------------------------------------------------------
+# MÓDULOS DEL KERNEL POR PERFIL
+# ----------------------------------------------------------
+if [ -n "$KERNEL_VERSION" ]; then
+  case "$PROFILE" in
+    disk)
+      find \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/{crypto,fs,lib} \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,nvme,md,firewire} \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/drivers/{scsi,message,pcmcia,virtio} \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/drivers/usb/{host,storage} \
+        -type f 2>/dev/null | cpio -p --make-directories --quiet "$WDIR"
+      ;;
+    live)
+      find \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/fs \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/lib \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,nvme} \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/drivers/{scsi,virtio} \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/drivers/usb/{host,storage} \
+        /usr/lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,cdrom,input} \
+        -type f 2>/dev/null | cpio -p --make-directories --quiet "$WDIR"
+      ;;
+    netinstall)
+      # Modules that netinstall needs to load
+      NETINSTALL_MODULES="
+        ext2 ext3 ext4 vfat fat exfat ntfs3 btrfs xfs
+        scsi_mod sd_mod sr_mod cdrom
+        usbcore usb_common usb-storage uas
+        xhci_hcd ehci_hcd uhci_hcd xhci_pci ehci_pci ohci_pci
+        ahci libata zram
+        ata_piix pata_generic
+        nvme nvme_core
+        hid-generic usbhid i8042 atkbd libps2
+        virtio_net e1000 e1000e r8169 tg3
+        ath5k ath9k iwlwifi iwlmvm iwlmld iwldvm \
+        rtl8xxxu rtl8188ee rtl8192ce rtl8723be rtl8821ae \
+        rtw88_8822be rtw88_8822ce rtw89_8852be rtw89_8852ce rtw89_8922ae
+      "
+      # Resolve full dependency paths from host modules.dep
+      for mod in $NETINSTALL_MODULES; do
+        modprobe \
+          --set-version "$KERNEL_VERSION" \
+          --show-depends "$mod" 2>/dev/null \
+        | sed -n 's/^insmod \///p'
+      done | sort -u | while read -r path; do
+        install -D "/$path" "$WDIR/usr/$path"
+      done
+      ;;
+  esac
+
+  mkdir -p "$WDIR/usr/lib/modules/$KERNEL_VERSION"
+  cp /usr/lib/modules/$KERNEL_VERSION/modules.{builtin,order} "$WDIR/usr/lib/modules/$KERNEL_VERSION"/
+  [ -f /usr/lib/modules/$KERNEL_VERSION/modules.builtin.modinfo ] && \
+    cp /usr/lib/modules/$KERNEL_VERSION/modules.builtin.modinfo "$WDIR/usr/lib/modules/$KERNEL_VERSION"/
+
+  # Firmware mínimo
+  mkdir -p "$WDIR/usr/lib/firmware"
+  find "$WDIR/usr/lib/modules/$KERNEL_VERSION" -name "*.ko*" \
+  | xargs -r modinfo -F firmware \
+  | sort -u \
+  | while read -r fw; do
+      [ -n "$fw" ] || continue
+      if [ -f "/usr/lib/firmware/$fw" ]; then
+        install -D "/usr/lib/firmware/$fw" "$WDIR/usr/lib/firmware/$fw"
+      elif [ -f "/usr/lib/firmware/$fw.zst" ]; then
+        install -D "/usr/lib/firmware/$fw.zst" "$WDIR/usr/lib/firmware/$fw.zst"
+      elif [ -f "/usr/lib/firmware/$fw.xz" ]; then
+        install -D "/usr/lib/firmware/$fw.xz" "$WDIR/usr/lib/firmware/$fw.xz"
+      fi
+    done
+
+  # Descomprimir módulos del kernel (compatibilidad con kernels sin módulo decompress)
+  if [ "$DECOMPRESS_MODULES" = true ]; then
+    find "$WDIR/usr/lib/modules" -name "*.ko.zst" -exec unzstd -f --rm {} \; 2>/dev/null || true
+    find "$WDIR/usr/lib/modules" -name "*.ko.gz" -exec gunzip -f {} \; 2>/dev/null || true
+    find "$WDIR/usr/lib/modules" -name "*.ko.xz" -exec unxz -f {} \; 2>/dev/null || true
+  fi
+
+  # depmod busca lib/modules/ en BASE (no usr/lib/modules/)
+  depmod -b "$WDIR/usr" "$KERNEL_VERSION" 2>/dev/null || true
+  if [ ! -s "$WDIR/usr/lib/modules/$KERNEL_VERSION/modules.dep" ]; then
+    echo "depmod failed, generating flat modules.dep from copied modules..." >&2
+    MODDIR="$WDIR/usr/lib/modules/$KERNEL_VERSION"
+    > "$MODDIR/modules.dep"
+    find "$MODDIR/kernel" -name "*.ko*" -type f | while read -r ko; do
+      echo "${ko#$MODDIR/}:"
+    done >> "$MODDIR/modules.dep"
+    > "$MODDIR/modules.alias"
+    > "$MODDIR/modules.symbols"
+    > "$MODDIR/modules.softdep"
+    > "$MODDIR/modules.devname"
+  fi
+
+  # modules.dep.bb se genera al boot por 20-load-modules via "depmod"
+  # No es necesario generarlo en build-time
+fi
+
+run_hooks pre-pack
+
+# ----------------------------------------------------------
+# EMPAQUETADO
+# ----------------------------------------------------------
+compress() {
+  case "$COMPRESS" in
+    gz)  gzip -n -f ;;
+    xz)  xz -9 -c --check=crc32 ${XZ_EXTREME:+--extreme} ;;
+    zstd) zstd -T0 -19 -c ;;
+  esac
+}
+
+printf "Creando $INITRAMFS_FILE... "
+( cd "$WDIR" && find . | cpio -o -H newc --quiet ) | compress > "${INITRAMFS_FILE}.tmp" -
+
+run_hooks pre-microcode
+
+# Microcódigo
+if ls /usr/lib/firmware/intel-ucode/* >/dev/null 2>&1 || \
+   ls /usr/lib/firmware/amd-ucode/*   >/dev/null 2>&1; then
+  rm -rf "$WDIR"/*
+  DSTDIR=$WDIR/kernel/x86/microcode
+  mkdir -p "$DSTDIR"
+  [ -d /usr/lib/firmware/amd-ucode ] && \
+    cat /usr/lib/firmware/amd-ucode/microcode_amd*.bin > "$DSTDIR/AuthenticAMD.bin"
+  [ -d /usr/lib/firmware/intel-ucode ] && \
+    cat /usr/lib/firmware/intel-ucode/* > "$DSTDIR/GenuineIntel.bin"
+  ( cd "$WDIR"; find . | cpio -o -H newc --quiet ) | cat - "${INITRAMFS_FILE}.tmp" > "$INITRAMFS_FILE"
+else
+  mv "${INITRAMFS_FILE}.tmp" "$INITRAMFS_FILE"
+fi
+
+if [ -z "$CUSTOM_STAGING" ]; then
+  rm -rf "$WDIR"
+fi
+rm -f "$unsorted"
+
+printf "listo.\n"
