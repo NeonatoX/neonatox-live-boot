@@ -284,8 +284,17 @@ if [ "$EMBEDDED_MODE" = true ]; then
         "$SCRIPT_DIR/build-tools.sh" --fetch busybox && [ -f "$BUSYBOX_BIN" ] || "$SCRIPT_DIR/build-tools.sh" --busybox
         [ -f "$BUSYBOX_BIN" ] || { echo -e "${RED}[ERROR]${NC} busybox no disponible" >&2; exit 1; }
     fi
-    [ -x "$BUSYBOX_BIN" ] && "$BUSYBOX_BIN" --help >/dev/null 2>&1 || {
-        echo -e "${RED}[ERROR]${NC} busybox no funcional en $BUSYBOX_BIN" >&2; exit 1; }
+    # Busybox del arch, obligatorio. Validación POR ARCH:
+    #   nativo: se ejecuta (check funcional);
+    #   cross (armhf): no es ejecutable en el host x86, se valida con file(1)
+    #   que sea un ELF ARM estático (ejecutarlo daría "Exec format error").
+    if [ "$EMBED_ARCH" = "armhf" ]; then
+        file "$BUSYBOX_BIN" | grep -qE "ARM.*statically linked" || {
+            echo -e "${RED}[ERROR]${NC} no es un ELF ARM estático: $BUSYBOX_BIN" >&2; exit 1; }
+    else
+        [ -x "$BUSYBOX_BIN" ] && "$BUSYBOX_BIN" --help >/dev/null 2>&1 || {
+            echo -e "${RED}[ERROR]${NC} busybox no funcional en $BUSYBOX_BIN" >&2; exit 1; }
+    fi
     echo -e "${GREEN}[OK]${NC} busybox ready ($BUSYBOX_BIN)"
 
     # Tools del perfil (PROFILE_REQUIRES) en el dir de la arch
