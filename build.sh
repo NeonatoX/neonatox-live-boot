@@ -8,8 +8,13 @@ set -e
 
 # Check if running as root
 if [[ "$(id -u)" -ne 0 ]]; then
-    echo "Error: This script must be run as root" >&2
-    exit 1
+    # El modo embedded vierta un árbol en output/ sin snapshot de "/",
+    # sin grub/xorriso ni mksquashfs: no requiere root.
+    if [[ "$*" != *"--make-embedded"* ]]; then
+        echo "Error: This script must be run as root" >&2
+        exit 1
+    fi
+    echo "[INFO] Modo embedded: no requiere root"
 fi
 
 PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -120,6 +125,8 @@ trap 'echo -e "${RED}[FATAL]${NC} error in section: $CURRENT_SECTION (line $LINE
 
 NETINSTALL_MODE=false
 SYSTEM_MUSL=false
+EMBEDDED_MODE=false
+EMBED_TARGET=""
 WITHOUT_MAKE_ISO=false
 MAKE_ISO_ONLY=false
 DO_CLEAN=false
@@ -133,6 +140,8 @@ Uso: sudo ./build.sh [OPCIONES]
 
 Opciones:
   --make-netinstall        Generar ISO netinstall (sin squashfs, con herramientas de red)
+  --make-embedded          Generar sysroot embebido (output/neonatox-sysroot-<arch>) en vez de ISO
+  --target ARCH            (embedded) arquitectura del sysroot: ARMHF o vacío = host
   --system-musl            (netinstall) nhopkg con soporte musl (repo-arch=x86_64-musl)
   --without-make-iso       Preparar artefactos sin empaquetar la ISO
   --make-iso               Solo empaquetar ISO desde artefactos existentes
@@ -156,6 +165,8 @@ echo "Neonatox Live Boot - ${NLB_VERSION} Carlos Sanchez - 2007-2026"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --make-netinstall) NETINSTALL_MODE=true ;;
+        --make-embedded) EMBEDDED_MODE=true ;;
+        --target) EMBED_TARGET="$2"; shift ;;
         --system-musl) SYSTEM_MUSL=true ;;
         --without-make-iso) WITHOUT_MAKE_ISO=true ;;
         --make-iso) MAKE_ISO_ONLY=true ;;
@@ -213,12 +224,170 @@ if [ "$SYSTEM_MUSL" = true ] && [ "$NETINSTALL_MODE" = false ]; then
     exit 1
 fi
 
+# --make-embedded es excluyente con --make-netinstall
+if [ "$EMBEDDED_MODE" = true ] && [ "$NETINSTALL_MODE" = true ]; then
+    echo -e "${RED}[ERROR]${NC} --make-embedded y --make-netinstall son excluyentes" >&2
+    exit 1
+fi
+
+# --target solo tiene sentido junto a --make-embedded
+if [ -n "$EMBED_TARGET" ] && [ "$EMBEDDED_MODE" = false ]; then
+    echo -e "${RED}[ERROR]${NC} --target solo es válido junto con --make-embedded" >&2
+    exit 1
+fi
+
 case "$COMPRESSION" in
     zst|zstd) COMPRESSION="zstd" ;;
     xz) ;;
     gz) ;;
     *) echo -e "${RED}[ERROR]${NC} Compresión no soportada: $COMPRESSION (zstd, xz, gz)" >&2; exit 1 ;;
 esac
+
+# ----------------------------------------------------------
+# MODO EMBEDDED: perfil mkinitramfs → output/neonatox-sysroot-<arch>
+# Espejo estructural de netinstall, pero vierta el árbol en vez de cpio,
+# sin kernel, sin squashfs, sin grub/xorriso.
+# ----------------------------------------------------------
+if [ "$EMBEDDED_MODE" = true ]; then
+    CURRENT_SECTION="embedded sysroot"
+
+    # Resolución de arquitectura / dir de tools
+    if [ -n "$EMBED_TARGET" ]; then
+        EMBED_ARCH="$(echo "$EMBED_TARGET" | tr 'A-Z' 'a-z')"
+        if [ "$EMBED_ARCH" != "armhf" ]; then
+            echo -e "${RED}[ERROR]${NC} --target solo soporta ARMHF (fase 1)" >&2
+            exit 1
+        fi
+        TOOLS_ARCH_DIR="$SCRIPT_DIR/tools/output/armhf"
+    else
+        EMBED_ARCH="$(uname -m)"
+        TOOLS_ARCH_DIR="$SCRIPT_DIR/tools/output"
+    fi
+
+    SYSROOT_DIR="$OUTDIR/neonatox-sysroot-$EMBED_ARCH"
+    EXTRA_DIR="$WORKDIR/extra"
+    rm -rf "$SYSROOT_DIR"
+    mkdir -p "$EXTRA_DIR" "$SYSROOT_DIR"
+
+    echo -e "${YELLOW}[INFO]${NC} Modo embedded ($EMBED_ARCH): $SYSROOT_DIR"
+    echo -e "${YELLOW}[INFO]${NC} Sysroot SIN kernel: el usuario aporta kernel y módulos"
+
+    # Busybox del arch, obligatorio
+    BUSYBOX_BIN="$TOOLS_ARCH_DIR/busybox"
+    if [ ! -f "$BUSYBOX_BIN" ]; then
+        if [ "$EMBED_ARCH" = "armhf" ]; then
+            echo -e "${RED}[ERROR]${NC} $BUSYBOX_BIN no existe" >&2
+            echo -e "${YELLOW}[HINT]${NC} Ejecute: ./build-tools.sh --target ARMHF --busybox (y --all)" >&2
+            exit 1
+        fi
+        echo -e "${YELLOW}[INFO]${NC} Embedded: buscando busybox nativo..."
+        "$SCRIPT_DIR/build-tools.sh" --fetch busybox && [ -f "$BUSYBOX_BIN" ] || "$SCRIPT_DIR/build-tools.sh" --busybox
+        [ -f "$BUSYBOX_BIN" ] || { echo -e "${RED}[ERROR]${NC} busybox no disponible" >&2; exit 1; }
+    fi
+    [ -x "$BUSYBOX_BIN" ] && "$BUSYBOX_BIN" --help >/dev/null 2>&1 || {
+        echo -e "${RED}[ERROR]${NC} busybox no funcional en $BUSYBOX_BIN" >&2; exit 1; }
+    echo -e "${GREEN}[OK]${NC} busybox ready ($BUSYBOX_BIN)"
+
+    # Tools del perfil (PROFILE_REQUIRES) en el dir de la arch
+    # armhf: nunca se auto-construye (toolchain externo); error claro.
+    EMBED_TOOLS="bash:bash e2fsprogs:mkfs.ext4 dropbear:dropbear \
+wpa_supplicant:wpa_supplicant zstd:zstd btrfsprogs:btrfs"
+    for spec in $EMBED_TOOLS; do
+        tool="${spec%%:*}"
+        bin="$TOOLS_ARCH_DIR/${spec##*:}"
+        if [ ! -f "$bin" ]; then
+            if [ "$EMBED_ARCH" = "armhf" ]; then
+                echo -e "${RED}[ERROR]${NC} $bin no existe" >&2
+                echo -e "${YELLOW}[HINT]${NC} Ejecute: ./build-tools.sh --target ARMHF --$tool" >&2
+                exit 1
+            fi
+            echo -e "${YELLOW}[INFO]${NC} Embedded: buscando $tool nativo..."
+            "$SCRIPT_DIR/build-tools.sh" --fetch "$tool" && [ -f "$bin" ] || "$SCRIPT_DIR/build-tools.sh" "--$tool"
+            [ -f "$bin" ] || { echo -e "${RED}[ERROR]${NC} $tool no disponible en $bin" >&2; exit 1; }
+        fi
+    done
+
+    # dropbearkey NATIVO del host para generar las keys (agnósticas de arch)
+    NATIVE_DROPBEARKEY="$SCRIPT_DIR/tools/output/dropbearkey"
+    if [ ! -f "$NATIVE_DROPBEARKEY" ]; then
+        "$SCRIPT_DIR/build-tools.sh" --fetch dropbear && [ -f "$NATIVE_DROPBEARKEY" ] || "$SCRIPT_DIR/build-tools.sh" --dropbear
+        [ -f "$NATIVE_DROPBEARKEY" ] || { echo -e "${RED}[ERROR]${NC} dropbearkey nativo no disponible" >&2; exit 1; }
+    fi
+    echo -e "${GREEN}[OK]${NC} tools del perfil ready ($TOOLS_ARCH_DIR)"
+
+    # EXTRA_DIR (espejo de netinstall) + host keys POR IMAGEN + marcador de modo
+    [ -f "$SCRIPT_DIR/initramfs/wifi-wizard.sh" ] && \
+        cp "$SCRIPT_DIR/initramfs/wifi-wizard.sh" "$EXTRA_DIR/"
+    [ -f "$SCRIPT_DIR/initramfs/wifi-config.sh" ] && \
+        cp "$SCRIPT_DIR/initramfs/wifi-config.sh" "$EXTRA_DIR/"
+    [ -f "$SCRIPT_DIR/initramfs/disk-wizard.sh" ] && \
+        cp "$SCRIPT_DIR/initramfs/disk-wizard.sh" "$EXTRA_DIR/"
+
+    echo -e "${YELLOW}[INFO]${NC} Generando dropbear host keys POR IMAGEN..."
+    mkdir -p "$EXTRA_DIR/ssh-hostkeys"
+    rm -f "$EXTRA_DIR/ssh-hostkeys/"*
+    "$NATIVE_DROPBEARKEY" -t ed25519 -f "$EXTRA_DIR/ssh-hostkeys/dropbear_ed25519_host_key" >/dev/null 2>&1 || {
+        echo -e "${RED}[ERROR]${NC} dropbearkey ed25519 falló" >&2; exit 1; }
+    "$NATIVE_DROPBEARKEY" -t rsa -s 2048 -f "$EXTRA_DIR/ssh-hostkeys/dropbear_rsa_host_key" >/dev/null 2>&1 || {
+        echo -e "${RED}[ERROR]${NC} dropbearkey rsa falló" >&2; exit 1; }
+    chmod 0600 "$EXTRA_DIR/ssh-hostkeys/"*
+    echo "embedded" > "$EXTRA_DIR/neonatox-mode"
+    echo -e "${GREEN}[OK]${NC} keys + marcador listos (ganan los que trae la imagen)"
+
+    # mkinitramfs --profile embedded → vierta el árbol
+    MKINITRAMFS=""
+    for cand in \
+        "$SCRIPT_DIR/neonatox-mkinitramfs/src/mkinitramfs" \
+        "$SCRIPT_DIR/../neonatox-mkinitramfs/src/mkinitramfs" \
+        /usr/sbin/mkinitramfs \
+        /usr/bin/mkinitramfs; do
+        if [ -x "$cand" ]; then
+            MKINITRAMFS="$cand"
+            break
+        fi
+    done
+    if [ -z "$MKINITRAMFS" ]; then
+        echo -e "${RED}[ERROR]${NC} mkinitramfs no encontrado"
+        echo "Esperado en $SCRIPT_DIR/neonatox-mkinitramfs/src/mkinitramfs"
+        exit 1
+    fi
+
+    export EXTRA_DIR="$EXTRA_DIR"
+    echo -e "${YELLOW}[INFO]${NC} Running mkinitramfs --profile embedded..."
+
+    "$MKINITRAMFS" \
+        --profile embedded \
+        --output "$SYSROOT_DIR" \
+        --tools-dir "$TOOLS_ARCH_DIR" \
+        --neonatox-dir "$SCRIPT_DIR/initramfs" \
+        --hooks-dir "$SCRIPT_DIR/initramfs/hooks"
+
+    echo -e "${GREEN}[OK]${NC} sysroot vierto..."
+
+    # Verificación estructural (sin kernel, sin .ko, perfil correcto)
+    echo -e "${YELLOW}[CHECK]${NC} verificando sysroot..."
+    if [ ! -x "$SYSROOT_DIR/init" ]; then
+        echo -e "${RED}[ERROR]${NC} falta /init en la sysroot" >&2; exit 1
+    fi
+    if [ "$(cat "$SYSROOT_DIR/etc/neonatox-mode" 2>/dev/null)" != "embedded" ]; then
+        echo -e "${RED}[ERROR]${NC} marcador /etc/neonatox-mode no es 'embedded'" >&2; exit 1
+    fi
+    if [ -n "$(find "$SYSROOT_DIR" -name 'vmlinuz*' -o -name '*.ko' 2>/dev/null)" ]; then
+        echo -e "${RED}[ERROR]${NC} la sysroot embedio kernel/módulos (contrato 'sin kernel')" >&2; exit 1
+    fi
+
+    echo "============================================"
+    echo -e "${YELLOW}SYSROOT READY${NC}:"
+    echo -e "${GREEN}$SYSROOT_DIR${NC}"
+    echo "  arch    : $EMBED_ARCH"
+    echo "  perfil  : embedded ($(cat "$SYSROOT_DIR/etc/neonatox-mode"))"
+    echo "  init    : $(readlink -f "$SYSROOT_DIR/init")"
+    echo "  bins    : busybox dropbear wpa_supplicant mkfs.ext4 zstd btrfs bash"
+    echo "  ssh keys: generadas por imagen (fingerprint estable entre boots)"
+    echo "  kernel  : NO incluido (añade el tuyo)"
+    echo "============================================"
+    exit 0
+fi
 
 # ----------------------------------------------------------
 # PRE-CHECKS
@@ -509,14 +678,14 @@ ensure_tool() {
     echo -e "${YELLOW}[INFO]${NC} $tool not found at $bin"
     case "$TOOLS_MODE" in
         compile)
-            "$BUILD_TOOLS" "--$tool" || true
+            "$SCRIPT_DIR/build-tools.sh" "--$tool" || true
             ;;
         fetch)
-            "$BUILD_TOOLS" --fetch "$tool" || true
+            "$SCRIPT_DIR/build-tools.sh" --fetch "$tool" || true
             ;;
         *)
-            "$BUILD_TOOLS" --fetch "$tool" && return 0
-            "$BUILD_TOOLS" "--$tool" || true
+            "$SCRIPT_DIR/build-tools.sh" --fetch "$tool" && return 0
+            "$SCRIPT_DIR/build-tools.sh" "--$tool" || true
             ;;
     esac
     if [ ! -f "$bin" ]; then

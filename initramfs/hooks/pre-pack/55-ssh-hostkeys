@@ -1,0 +1,24 @@
+#!/bin/sh
+# 55-ssh-hostkeys — dropbear host keys POR IMAGEN (no por cada boot) + marcador de modo.
+# Guard: netinstall y embedded. build.sh pre-genera las keys con dropbearkey NATIVO
+# (agnósticas de arch) en $EXTRA_DIR/ssh-hostkeys/, y el marcador /etc/neonatox-mode
+# en $EXTRA_DIR/neonatox-mode (embedded). setup_ssh() las reutiliza en runtime.
+WDIR="$1"
+[ -n "$WDIR" ] || exit 1
+
+[ "$PROFILE" != "netinstall" ] && [ "$PROFILE" != "embedded" ] && exit 0
+
+# Keys SSH del host dropbear (fingerprint estable entre boots de la misma imagen)
+if [ -d "$EXTRA_DIR/ssh-hostkeys" ]; then
+    mkdir -p "$WDIR/etc/dropbear"
+    for key in dropbear_ed25519_host_key dropbear_rsa_host_key; do
+        [ -f "$EXTRA_DIR/ssh-hostkeys/$key" ] && \
+            install -m 0600 "$EXTRA_DIR/ssh-hostkeys/$key" "$WDIR/etc/dropbear/$key"
+    done
+fi
+
+# Modo horneado (solo embedded la escribe; init la lee antes del case de MODE)
+[ "$PROFILE" = "embedded" ] && [ -f "$EXTRA_DIR/neonatox-mode" ] && \
+    install -m 0644 "$EXTRA_DIR/neonatox-mode" "$WDIR/etc/neonatox-mode"
+
+exit 0

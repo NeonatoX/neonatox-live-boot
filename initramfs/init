@@ -11,14 +11,22 @@ show_banner
 
 CMDLINE="$(cat /proc/cmdline)"
 
+# Modo horneado en build: la sysroot embedded lleva /etc/neonatox-mode y arranca
+# como raíz real (root=<dev> en cmdline) sin initramfs. El cmdline explícito
+# (netinstall=1) pisa el marcador; root= → disk SOLO sin marcador (initrd clásico).
 MODE="live"
+if [ -f /etc/neonatox-mode ]; then
+    MODE="$(cat /etc/neonatox-mode 2>/dev/null)"
+    [ -n "$MODE" ] || MODE="live"
+fi
 echo "$CMDLINE" | grep -q "netinstall=1" && MODE="netinstall"
-case "$CMDLINE" in root=*|*" root="*) MODE="disk" ;; esac
+case "$CMDLINE" in root=*|*" root="*) [ ! -f /etc/neonatox-mode ] && MODE="disk" ;; esac
 
 case "$MODE" in
     live)       . /lib/init-live.sh ;;
     netinstall) . /lib/init-live.sh; . /lib/init-net.sh ;;
     disk)       . /lib/init-disk.sh ;;
+    embedded)   . /lib/init-embedded.sh ;;
 esac
 
 for phase in /libexec/[0-9][0-9]-*; do

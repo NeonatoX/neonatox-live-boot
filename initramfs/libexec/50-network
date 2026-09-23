@@ -1,4 +1,4 @@
-[ "$1" != "netinstall" ] && return 0
+[ "$1" != "netinstall" ] && [ "$1" != "embedded" ] && return 0
 
 dhcp_all
 wifi_config

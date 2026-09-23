@@ -3,7 +3,7 @@ case "${1:-live}" in
         FILESYSTEMS="ext2 ext3 ext4 btrfs xfs vfat ntfs3"
         NET=""; WIFI=""
         ;;
-    netinstall)
+    netinstall|embedded)
         FILESYSTEMS="ext2 ext3 ext4 vfat fat exfat ntfs3 btrfs xfs"
         NET="virtio_net e1000 e1000e r8169 tg3"
         WIFI="ath5k ath9k iwlwifi iwlmvm iwlmld iwldvm \

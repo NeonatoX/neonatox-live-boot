@@ -7,10 +7,10 @@ case "${1:-live}" in
         echo -e "${GREEN}[BOOT]${NC} starting ${INIT##*/}"
         exec switch_root /mnt/newroot "$INIT"
         ;;
-    netinstall)
+    netinstall|embedded)
         show_ip
         show_guide
-        echo -e "${YELLOW}[INFO]${NC} Netinstall environment ready"
+        echo -e "${YELLOW}[INFO]${NC} ${PROFILE_NAME:-netinstall} environment ready"
         echo ""
         run_shell
         ;;

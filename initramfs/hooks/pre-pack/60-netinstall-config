@@ -2,7 +2,7 @@
 WDIR="$1"
 [ -n "$WDIR" ] || exit 1
 
-[ "$PROFILE" != "netinstall" ] && exit 0
+[ "$PROFILE" != "netinstall" ] && [ "$PROFILE" != "embedded" ] && exit 0
 
 # wifi-config.sh
 [ -f "$EXTRA_DIR/wifi-config.sh" ] && install -m 0755 "$EXTRA_DIR/wifi-config.sh" "$WDIR/wifi-config.sh"

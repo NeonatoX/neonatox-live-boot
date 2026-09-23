@@ -7,8 +7,9 @@ Opciones:
   -k, --kernel VER      Versión del kernel (por defecto: \$(uname -r))
   -r, --release STR     Sufijo de release (por defecto: empty)
   -c, --compress FORMAT Compresión: gz, xz, zstd (por defecto: zstd)
-  -p, --profile PROFILE Perfil: disk, live, netinstall (por defecto: disk)
-  -o, --output FILE     Ruta de salida (por defecto: /boot/initrd-*)
+  -p, --profile PROFILE Perfil: disk, live, netinstall, embedded (por defecto: disk)
+  -o, --output FILE     Ruta de salida (por defecto: /boot/initrd-*); con --profile embedded
+                        es el DIRECTORIO destino del sysroot
   --tools-dir DIR       Directorio con binarios estáticos (busybox; obligatorio live/netinstall, opcional disk)
   --staging DIR         Directorio de trabajo temporal
   --neonatox-dir DIR    Ruta a neonatox-live-boot (lib/ + libexec/)
@@ -72,11 +73,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  disk|live|netinstall) ;;
-  *) echo "Error: perfil '$PROFILE' no válido (disk, live, netinstall)"; exit 1 ;;
+  disk|live|netinstall|embedded) ;;
+  *) echo "Error: perfil '$PROFILE' no válido (disk, live, netinstall, embedded)"; exit 1 ;;
 esac
 
-if [ -n "$KERNEL_VERSION" ] && [ ! -d "/usr/lib/modules/$KERNEL_VERSION" ]; then
+if [ -n "$KERNEL_VERSION" ] && [ "$PROFILE" != "embedded" ] && [ ! -d "/usr/lib/modules/$KERNEL_VERSION" ]; then
   echo "Error: No existe /usr/lib/modules/$KERNEL_VERSION"
   exit 1
 fi
@@ -196,7 +197,7 @@ case "$PROFILE" in
     done
     [ -x /usr/sbin/lvm ] && sbinfiles="$sbinfiles lvm dmsetup"
     ;;
-  live|netinstall)
+  live|netinstall|embedded)
     binfiles="sh cat cp dd ls mkdir mount umount sed sleep ln rm uname readlink basename"
     sbinfiles="modprobe switch_root"
     # mdev en lugar de udevd
@@ -241,7 +242,7 @@ pick_path_busybox() {
 }
 
 case "$PROFILE" in
-    live|netinstall)
+    live|netinstall|embedded)
         [ -n "$TOOLS_DIR" ] && [ -f "$TOOLS_DIR/busybox" ] && BB_BIN="$TOOLS_DIR/busybox"
         if [ -z "$BB_BIN" ]; then
             echo "Error: el perfil $PROFILE requiere busybox en --tools-dir" >&2
@@ -389,8 +390,9 @@ fi
 
 # ----------------------------------------------------------
 # MÓDULOS DEL KERNEL POR PERFIL
+# (embedded: sysroot SIN kernel — no se copian módulos)
 # ----------------------------------------------------------
-if [ -n "$KERNEL_VERSION" ]; then
+if [ -n "$KERNEL_VERSION" ] && [ "$PROFILE" != "embedded" ]; then
   case "$PROFILE" in
     disk)
       find \
@@ -499,6 +501,18 @@ compress() {
 }
 
 printf "Creando $INITRAMFS_FILE... "
+if [ "$PROFILE" = "embedded" ]; then
+  # Perfil embedded: en vez de initramfs.cpio.gz se vierte el árbol de
+  # arranque (sysroot sin kernel) a un DIRECTORIO destino (--output).
+  mkdir -p "$INITRAMFS_FILE"
+  cp -a "$WDIR/." "$INITRAMFS_FILE"/
+  if [ -z "$CUSTOM_STAGING" ]; then
+    rm -rf "$WDIR"
+  fi
+  rm -f "$unsorted"
+  printf "listo.\n"
+  exit 0
+fi
 ( cd "$WDIR" && find . | cpio -o -H newc --quiet ) | compress > "${INITRAMFS_FILE}.tmp" -
 
 run_hooks pre-microcode
