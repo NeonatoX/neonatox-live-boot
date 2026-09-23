@@ -241,16 +241,44 @@ esac
 # BUSYBOX + symlinks de applets (cualquier perfil con busybox)
 # MUST come before ldd blocks so el fallback glibc solo corre sin busybox
 # ----------------------------------------------------------
+
+# Applets del perfil embedded (fallback SOLO cuando --list no es posible):
+# un busybox ARM no es ejecutable en el host x86 ("Exec format error"), así que
+# `./busybox --list` no produce salida. Esta lista se extrajo del .config armhf
+# que produjo el binario; es exacta para esa config. Para perfiles construidos
+# en el host (live/netinstall/disk) --list siempre funciona y se usa lo real.
+EMBEDDED_APPLET_LIST="cat chgrp chmod chown cp cpio date dd df dmesg dnsdomainname dumpkmap echo egrep false fdflush fgrep getopt grep gunzip gzip hostname kill link linux32 linux64 ln login ls mkdir mknod mktemp more mount mountpoint mt mv netstat nice pidof ping pipe_progress printenv ps pwd rm rmdir run-parts sed setarch setpriv setserial sh sleep stty su sync tar touch true umount uname usleep vi watch zcat arp e2freefrag fdisk fsck.ext3 hdparm init ipneigh loadkmap mdev mkfs.ext4 pivot_root route swapoff tune2fs vconfig badblocks e2fsck filefrag fsck.ext4 hwclock insmod iproute logsave mkdosfs mklost+found poweroff runlevel swapon udevadm watchdog blkid e2label freeramdisk fstrim ifconfig ip iprule losetup mke2fs mkswap reboot setconsole switch_root udevd devmem e2undo fsck getty ifdown ipaddr iptunnel lsmod mkfs.ext2 modprobe resize2fs start-stop-daemon sysctl udhcpc dumpe2fs e4crypt fsck.ext2 halt ifup iplink klogd makedevs mkfs.ext3 nameif rmmod sulogin syslogd uevent"
+
+applet_symlinks() {
+  local list=""
+  # --list solo puede ejecutarse si el binario es del host (nativo).
+  if ! list="$(./busybox --list 2>/dev/null)" || [ -z "$list" ]; then
+    if [ "$PROFILE" = "embedded" ]; then
+      echo "[INFO] busybox no ejecutable en este host (cross embedded) — applets de la lista estática" >&2
+      list="$EMBEDDED_APPLET_LIST"
+    else
+      echo "Error: $WDIR/usr/bin/busybox --list no produce applets (busybox no funcional en este host)" >&2
+      exit 1
+    fi
+  fi
+  # $list puede venir como una palabra por línea (--list) o como lista de
+  # palabras separadas por espacios (EMBEDDED_APPLET_LIST): se normaliza con un
+  # for que hace word-splitting en ambos casos.
+  for app in $list; do
+    [ "$app" = "busybox" ] && continue
+    case "$app" in
+      init|poweroff|reboot) continue ;;
+    esac
+    if [ ! -f /usr/share/hwdata/pci.ids ] && [ "$app" = "lspci" ]; then
+      continue
+    fi
+    ln -sf busybox "$app"
+  done
+}
+
 if [ -n "$BB_BIN" ]; then
   install -m0755 "$BB_BIN" "$WDIR/usr/bin/busybox"
-  ( cd "$WDIR/usr/bin" && ./busybox --list 2>/dev/null | \
-    grep -v "^init$" | grep -v "^poweroff$" | grep -v "^reboot$" | \
-    { [ ! -f /usr/share/hwdata/pci.ids ] && grep -v "^lspci$" || cat; } | \
-    while read -r app; do
-      [ "$app" = "busybox" ] && continue
-      ln -sf busybox "$app"
-    done
-  )
+  ( cd "$WDIR/usr/bin" && applet_symlinks )
   # lspci wrapper + pci.ids database (solo si existe en host y en el proyecto)
   if [ -n "$NEONATOX_DIR" ] && [ -f /usr/share/hwdata/pci.ids ] && [ -f "$NEONATOX_DIR/lspci" ]; then
     install -D /usr/share/hwdata/pci.ids "$WDIR/usr/share/hwdata/pci.ids"
