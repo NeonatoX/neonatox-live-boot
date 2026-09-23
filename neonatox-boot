@@ -1,0 +1,38 @@
+#!/bin/bash
+# neonatox-boot — launcher portátil de build.sh
+#
+# Es el build.sh del directorio standalone: delega en él tal cual, pasándole
+# sus flags (--make-netinstall, --make-embedded --target ARMHF, --clean, ...).
+# Ningún otro script cambia.
+#
+# Resolución del build.sh a invocar:
+#   1. junto a este script (directorio descargado o /usr/share/neonatox-boot)
+#   2. /usr/share/neonatox-boot/build.sh
+#   3. build.sh en PATH
+# Si no eres root se re-ejecuta con sudo (build.sh lo requiere).
+
+set -e
+
+resolve_build_script() {
+    local self_build="$1"
+    [ -f "$self_build" ] && { echo "$self_build"; return 0; }
+    [ -f /usr/share/neonatox-boot/build.sh ] && { echo /usr/share/neonatox-boot/build.sh; return 0; }
+    local in_path
+    in_path=$(command -v build.sh 2>/dev/null) && [ -n "$in_path" ] && { echo "$in_path"; return 0; }
+    echo ""
+}
+
+SELF_DIR=$(cd "$(dirname -- "$0")" && pwd -P)
+BUILD_SCRIPT=$(resolve_build_script "$SELF_DIR/build.sh")
+
+if [ -z "$BUILD_SCRIPT" ]; then
+    echo "Error: build.sh no encontrado" >&2
+    echo "Esperado junto a neonatox-boot, en /usr/share/neonatox-boot/ o en PATH" >&2
+    exit 1
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+    exec sudo "$BUILD_SCRIPT" "$@"
+fi
+
+exec "$BUILD_SCRIPT" "$@"

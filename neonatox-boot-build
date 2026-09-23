@@ -1,0 +1,27 @@
+#!/bin/bash
+# neonatox-boot-build — launcher portátil de build-tools.sh
+#
+# Igual que neonatox-boot pero para build-tools.sh (compilación de herramientas
+# estáticas). Nunca hace sudo: build-tools.sh se ejecuta como usuario normal.
+
+set -e
+
+resolve_build_tools() {
+    local self="$1"
+    [ -f "$self" ] && { echo "$self"; return 0; }
+    [ -f /usr/share/neonatox-boot/build-tools.sh ] && { echo /usr/share/neonatox-boot/build-tools.sh; return 0; }
+    local in_path
+    in_path=$(command -v build-tools.sh 2>/dev/null) && [ -n "$in_path" ] && { echo "$in_path"; return 0; }
+    echo ""
+}
+
+SELF_DIR=$(cd "$(dirname -- "$0")" && pwd -P)
+BT=$(resolve_build_tools "$SELF_DIR/build-tools.sh")
+
+if [ -z "$BT" ]; then
+    echo "Error: build-tools.sh no encontrado" >&2
+    echo "Esperado junto a neonatox-boot-build, en /usr/share/neonatox-boot/ o en PATH" >&2
+    exit 1
+fi
+
+exec "$BT" "$@"
