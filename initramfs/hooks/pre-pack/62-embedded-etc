@@ -1,11 +1,12 @@
 #!/bin/sh
 # 62-embedded-etc — skeleton /etc MÍNIMO para la sysroot embedded
 # (vendorizado de neonatox-bootstrap/bootstrap/data/etc, conjunto "versión mínima"):
-#   passwd, group, shells, os-release, lsb-release, resolv.conf, profile.
+#   shells, os-release, lsb-release, resolv.conf, profile.
 # Corre DESPUÉS del 60-netinstall-config para que su /etc/profile (mínimo)
 # quede sustituido por el profile LFS completo (embedded trae bash como sh).
-# No va profile.d/ (usa `locale`+`export -f`), ni bashrc/inputrc, ni skel/,
-# ni polkit-1/, ni default/grub (el sysroot no los necesita).
+# /etc/passwd y /etc/group NO se hornean (se eliminan si el hook 20 los
+# escribió): setup_ssh() los genera en runtime (root + hash).
+# No va profile.d/, bashrc/inputrc, skel/, polkit-1/ ni default/grub.
 WDIR="$1"
 [ -n "$WDIR" ] || exit 1
 
@@ -15,8 +16,11 @@ SRC="$NEONATOX_DIR/etc-embed"
 [ -d "$SRC" ] || { echo "[WARN] 62-embedded-etc: $SRC no existe (se omite)" >&2; exit 0; }
 
 mkdir -p "$WDIR/etc"
-for f in passwd group shells os-release lsb-release resolv.conf profile; do
+for f in shells os-release lsb-release resolv.conf profile; do
     [ -f "$SRC/$f" ] && install -m 0644 "$SRC/$f" "$WDIR/etc/$f"
 done
+
+# passwd/group horneados por el hook 20-passwd-shadow → fuera de la sysroot
+rm -f "$WDIR/etc/passwd" "$WDIR/etc/group"
 
 exit 0
