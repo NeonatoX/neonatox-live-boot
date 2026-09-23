@@ -764,8 +764,6 @@ mkdir -p "$EXTRA_DIR"
 if [ "$NETINSTALL_MODE" = true ]; then
     [ -f "$SCRIPT_DIR/initramfs/wifi-config.sh" ] && \
         cp "$SCRIPT_DIR/initramfs/wifi-config.sh" "$EXTRA_DIR/"
-    [ -f "$SCRIPT_DIR/initramfs/netinstall-init.sh" ] && \
-        cp "$SCRIPT_DIR/initramfs/netinstall-init.sh" "$EXTRA_DIR/"
     [ -f "$SCRIPT_DIR/initramfs/disk-wizard.sh" ] && \
         cp "$SCRIPT_DIR/initramfs/disk-wizard.sh" "$EXTRA_DIR/"
 

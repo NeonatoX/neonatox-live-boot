@@ -2,6 +2,12 @@
 PATH=/sbin:/bin:/usr/bin:/usr/sbin
 NLB_VERSION="v0.9"
 
+# netinstall-init.sh — DEPRECATED
+# Desde v0.10 el init unificado (initramfs/init + lib/ + libexec/) cubre el
+# perfil netinstall detectándolo por cmdline (netinstall=1). Este archivo se
+# conserva como respaldo y se eliminará en v1.0.
+# build.sh y hooks/pre-pack/60-netinstall-config ya no lo inyectan (P10).
+
 [ "$debug" = "1" ] && set -x
 
 # --------------------------------------------------

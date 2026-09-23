@@ -10,9 +10,6 @@ WDIR="$1"
 # disk-wizard.sh (partitioning wizard)
 [ -f "$EXTRA_DIR/disk-wizard.sh" ] && install -m 0755 "$EXTRA_DIR/disk-wizard.sh" "$WDIR/usr/bin/disk-wizard"
 
-# netinstall-init.sh (DEPRECATED fallback)
-[ -f "$EXTRA_DIR/netinstall-init.sh" ] && install -m 0755 "$EXTRA_DIR/netinstall-init.sh" "$WDIR/netinstall-init.sh"
-
 # udhcpc default script
 mkdir -p "$WDIR/usr/share/udhcpc"
 cat > "$WDIR/usr/share/udhcpc/default.script" << 'UDHCPC'
