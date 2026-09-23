@@ -9,21 +9,17 @@ NC='\033[0m'
 
 echo -e "${YELLOW}[INFO]${NC} Searching for musl compiler..."
 
-for cc in musl-gcc x86_64-linux-musl-gcc; do
-    MUSLGCC=$(command -v "$cc" 2>/dev/null || true)
-    [ -n "$MUSLGCC" ] && break
-done
-
-if [ -z "$MUSLGCC" ]; then
-    echo -e "${RED}[ERROR]${NC} musl compiler not found in PATH" >&2
-    exit 1
-fi
+. "$TOOLS_DIR/lib-cross.sh"
+resolve_compiler || exit 1
 
 echo -e "${YELLOW}[INFO]${NC} Using compiler: $MUSLGCC"
 
 cd "$SRC_DIR"
 
 JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+
+LIBNL_PREFIX="/tmp/libnl-install${CROSS_ARCH:+-$CROSS_ARCH}"
+rm -rf "$LIBNL_PREFIX"
 
 # ----------------------------------------------------------
 # Build libnl3 (static, required by wpa_supplicant nl80211)
@@ -50,8 +46,8 @@ echo -e "${YELLOW}[INFO]${NC} Configuring static libnl..."
 
 [ -f Makefile ] && make distclean || true
 
-CC="$MUSLGCC" CFLAGS="-static -Os -s" LDFLAGS="-static" \
-./configure --host=x86_64-linux-musl --enable-static --disable-shared --prefix=/tmp/libnl-install
+CC="$MUSLGCC" CFLAGS="-static -Os -s -fno-link-libatomic" LDFLAGS="-static -fno-link-libatomic" \
+./configure --host="$TOOLCHAIN_HOST" --enable-static --disable-shared --prefix="$LIBNL_PREFIX"
 
 echo -e "${YELLOW}[INFO]${NC} Compiling libnl..."
 make -j$JOBS
@@ -97,12 +93,29 @@ CONFIG_NO_WPA_MSG=y
 CONFIG_NO_WPA_PASSPHRASE=n
 CONFIG_EOF
 
-export CFLAGS="-static -Os -s -I/tmp/libnl-install/include/libnl3"
-export LDFLAGS="-static -L/tmp/libnl-install/lib"
+# The wpa Makefile (src/drivers/drivers.mak) injects
+#   $(shell $(PKG_CONFIG) --cflags libnl-3.0)
+# On the host that resolves to -I/usr/include/libnl3, which the cross
+# toolchain wrapper rejects. Point PKG_CONFIG_PATH at our libnl prefix so
+# pkg-config returns the correct per-arch include path (native too).
+export PKG_CONFIG_PATH="$LIBNL_PREFIX/lib/pkgconfig"
+
+# When CONFIG_LIBNL32=y, upstream drivers.mk (legacy variant) also injects a
+# HOST literal (-I/usr/include/libnl3). In cross mode the compiler rejects
+# hostel paths; redirect it to our cross libnl prefix.
+if [ -n "${CROSS_ARCH:-}" ]; then
+    sed -i 's| -I/usr/include/libnl3| -I'"$LIBNL_PREFIX"'/include/libnl3|' "$SRC_DIR/wpa_supplicant-${WPA_V}/src/drivers/drivers.mk"
+fi
+
+# Drop stale build/ objects from previous (other-arch) runs in this shared tree
+rm -rf build
+
+export CFLAGS="-static -Os -s -fno-link-libatomic -I$LIBNL_PREFIX/include/libnl3"
+export LDFLAGS="-static -fno-link-libatomic -L$LIBNL_PREFIX/lib"
 export LIBS="-Wl,--start-group -lnl-3 -lnl-genl-3 -Wl,--end-group"
 
 # Verify libnl static libs exist
-for lib in /tmp/libnl-install/lib/libnl-3.a /tmp/libnl-install/lib/libnl-genl-3.a; do
+for lib in "$LIBNL_PREFIX"/lib/libnl-3.a "$LIBNL_PREFIX"/lib/libnl-genl-3.a; do
     if [ ! -f "$lib" ]; then
         echo -e "${RED}[ERROR]${NC} Missing static library: $lib" >&2
         exit 1

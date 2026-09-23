@@ -10,15 +10,8 @@ NC='\033[0m' # No Color
 
 echo -e "${YELLOW}[INFO]${NC} Searching for musl compiler..."
 
-for cc in musl-gcc x86_64-linux-musl-gcc; do
-    MUSLGCC=$(command -v "$cc" 2>/dev/null || true)
-    [ -n "$MUSLGCC" ] && break
-done
-
-if [ -z "$MUSLGCC" ]; then
-    echo -e "${RED}[ERROR]${NC} musl compiler not found in PATH" >&2
-    exit 1
-fi
+. "$TOOLS_DIR/lib-cross.sh"
+resolve_compiler || exit 1
 
 echo -e "${YELLOW}[INFO]${NC} Using compiler: $MUSLGCC"
 
@@ -47,8 +40,20 @@ echo -e "${YELLOW}[INFO]${NC} Configuring static Bash..."
 
 [ -f Makefile ] && make distclean || true
 
-CC="$MUSLGCC" CFLAGS="-static -Os -s -std=gnu11 -fcommon" LDFLAGS="-static" \
-./configure   --host=x86_64-linux-musl \
+# Cross: GCC >=14 (C23 default) breaks the mkbuiltins HOST generator
+# (old-style xmalloc() prototype) unless CFLAGS_FOR_BUILD carries -std=gnu11.
+BUILD_CFLAGS="-static -Os -s -std=gnu11"
+[ -n "$CROSS_ARCH" ] && BUILD_CFLAGS="-std=gnu11"
+
+# GCC >=14: implicit-function-declaration is an ERROR by default (C99+/C23),
+# and bash-5.2.37's bundled lib/termcap/tparam.c relies on the old implicit
+# write(); keep -Wno-error so the termcap compile degrades to a warning in
+# BOTH native and cross (pre-existing upstream portability bug).
+CFLAGS="$CFLAGS -Wno-error=implicit-function-declaration"
+
+CC="$MUSLGCC" CFLAGS="$CFLAGS -static -Os -s -std=gnu11 -fcommon -fno-link-libatomic" LDFLAGS="-static -fno-link-libatomic" \
+CFLAGS_FOR_BUILD="$BUILD_CFLAGS" \
+./configure   --host="$TOOLCHAIN_HOST" \
               --enable-static-link \
               --without-bash-malloc \
               --disable-largefile \

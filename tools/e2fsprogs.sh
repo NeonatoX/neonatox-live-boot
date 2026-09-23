@@ -10,15 +10,8 @@ NC='\033[0m' # No Color
 
 echo -e "${YELLOW}[INFO]${NC} Searching for musl compiler..."
 
-for cc in musl-gcc x86_64-linux-musl-gcc aarch64-linux-musl-gcc; do
-    MUSLGCC=$(command -v "$cc" 2>/dev/null || true)
-    [ -n "$MUSLGCC" ] && break
-done
-
-if [ -z "$MUSLGCC" ]; then
-    echo -e "${RED}[ERROR]${NC} musl compiler not found in PATH" >&2
-    exit 1
-fi
+. "$TOOLS_DIR/lib-cross.sh"
+resolve_compiler || exit 1
 
 echo -e "${YELLOW}[INFO]${NC} Using compiler: $MUSLGCC"
 
@@ -46,13 +39,35 @@ fi
 
 cd "e2fsprogs-${VERSION}"
 
-echo -e "${YELLOW}[INFO]${NC} Patching for GCC 14+ compatibility..."
+echo -e "${YELLOW}[INFO]${NC} Patching for GCC 14+ / musl compatibility..."
 
-# GCC 14 treats implicit function declarations as error; my_llseek undeclared
-# on x86_64 because the SIZEOF_LONG==SIZEOF_LONG_LONG branch only defines
-# "llseek" but forgets to alias my_llseek too.
-sed -i 's|#define llseek lseek|#define llseek lseek\n#define my_llseek llseek|' \
-    lib/blkid/llseek.c
+# GCC 14 treats implicit function declarations as error; the
+# SIZEOF_LONG==SIZEOF_LONG_LONG branch (x86_64) defines "llseek" but forgets
+# to alias my_llseek too. musl does not provide _syscall5, so the ARM branch
+# must use syscall(__NR__llseek) directly. Both patches are guarded (idempotent).
+LLSEEK="lib/blkid/llseek.c"
+if ! grep -q 'Neonatox musl llseek patch' "$LLSEEK"; then
+    sed -i 's|^#define llseek lseek$|#define llseek lseek\n#define my_llseek llseek|' "$LLSEEK"
+    awk '
+        /^#ifndef __i386__$/ && !patched {
+            print "static blkid_loff_t my_llseek(int fd, blkid_loff_t offset, int origin)";
+            print "{";
+            print "\tblkid_loff_t result;";
+            print "\tint retval;";
+            print "";
+            print "\tretval = syscall(__NR__llseek, fd, ((unsigned long long) offset) >> 32,";
+            print "\t\t         ((unsigned long long)offset) & 0xffffffff,";
+            print "\t\t         &result, origin);";
+            print "\treturn (retval == -1 ? (blkid_loff_t) retval : result);";
+            print "}";
+            print "";
+            print "/* Neonatox musl llseek patch applied */";
+            skip=1; patched=1; next;
+        }
+        skip { if ($0 == "}") skip=0; next }
+        { print }
+    ' "$LLSEEK" > "$LLSEEK.new" && mv "$LLSEEK.new" "$LLSEEK"
+fi
 
 echo -e "${YELLOW}[INFO]${NC} Configuring static e2fsprogs (minimal for initramfs)..."
 
@@ -68,12 +83,13 @@ export BLKID_LIBS=""
 export BLKID_CFLAGS=""
 
 CC="$MUSLGCC" \
-CFLAGS="-static -Os -s -std=gnu11 -fno-stack-protector -U_FORTIFY_SOURCE" \
-LDFLAGS="-static" \
+CFLAGS="-static -Os -s -std=gnu11 -Wno-error=implicit-function-declaration -fno-stack-protector -U_FORTIFY_SOURCE -fno-link-libatomic" \
+LDFLAGS="-static -fno-link-libatomic" \
 ./configure \
-    --host=x86_64-linux-musl \
+    --host="$TOOLCHAIN_HOST" \
     --build=$(gcc -dumpmachine) \
     --disable-fsck \
+    --disable-fuse2fs \
     --disable-e2initrd-helper \
     --disable-tls \
     --disable-nls \
@@ -93,9 +109,11 @@ make -j"$JOBS" -C misc mke2fs tune2fs badblocks
 make -j"$JOBS" -C e2fsck e2fsck
 
 # ----------------------------------------------------------
-# Strip para reducir tamaño
+# Strip para reducir tamaño (strip del toolchain en cross)
 # ----------------------------------------------------------
-find . -type f -executable -exec strip --strip-unneeded {} \; 2>/dev/null || true
+STRIP_BIN="strip"
+[ -n "$CROSS_ARCH" ] && STRIP_BIN="$CROSS_PREFIX"strip
+find . -type f -executable -exec "$STRIP_BIN" --strip-unneeded {} \; 2>/dev/null || true
 
 # ----------------------------------------------------------
 # Validate static build

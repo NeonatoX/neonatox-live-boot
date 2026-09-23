@@ -6,14 +6,20 @@
 # ==========================================================
 
 # ----------------------------------------------------------
-# Detect architecture
+# Detect architecture.
+# Cross (--target) sets CROSS_ARCH explicitly and it wins;
+# otherwise it's the HOST architecture (real machine).
 # ----------------------------------------------------------
 detect_arch() {
-    case "$(uname -m)" in
-        x86_64)           echo "x86_64" ;;
-        aarch64|arm64)    echo "aarch64" ;;
-        *)                echo "$(uname -m)" ;;
-    esac
+    if [ -n "$CROSS_ARCH" ]; then
+        echo "$CROSS_ARCH"
+    else
+        case "$(uname -m)" in
+            x86_64)           echo "x86_64" ;;
+            aarch64|arm64)    echo "aarch64" ;;
+            *)                echo "$(uname -m)" ;;
+        esac
+    fi
 }
 
 # ----------------------------------------------------------
@@ -83,6 +89,24 @@ package_tool() {
         }
     done
 
+    # Cross: validate arch + static before packaging
+    if [ -n "$CROSS_ARCH" ]; then
+        for b in $BINS; do
+            file "$OUT_DIR/$b" | grep -q "statically linked" || {
+                echo "[WARN] $TOOL: $b is not statically linked, skip"
+                return 1
+            }
+            case "$CROSS_ARCH" in
+                armhf|arm)
+                    file "$OUT_DIR/$b" | grep -q "ARM" || {
+                        echo "[WARN] $TOOL: $b is not an ARM binary, skip"
+                        return 1
+                    }
+                ;;
+            esac
+        done
+    fi
+
     DIST="$TOOLS_DIR/dist"
     mkdir -p "$DIST"
     ZIP="$DIST/neonatox-$TOOL-$VER-$ARCH-$REV.zip"
@@ -95,6 +119,12 @@ package_tool() {
     done
 
     ( cd "$TMP" && sha256sum $BINS > SHA256SUMS )
+
+    # Deterministic zips: pin entry mtimes so identical binaries always
+    # produce the same zip sha256. Keeps the manifest <-> release assets
+    # stable across repackages WITHOUT bumping BUILD_REV.
+    SDE="${SOURCE_DATE_EPOCH:-1577836800}" # 2020-01-01T00:00:00Z
+    ( cd "$TMP" && touch -d "@$SDE" $BINS SHA256SUMS )
 
     ( cd "$TMP" && zip -q -9 "$ZIP" $BINS SHA256SUMS >/dev/null 2>&1 ) || {
         rm -rf "$TMP"
@@ -124,11 +154,12 @@ manifest_add() {
 
     MAN="$(manifest_path)"
     [ -f "$MAN" ] || printf '# tool toolver arch rev sha256 release_tag asset\n' > "$MAN"
-    grep -v "^$TOOL " "$MAN" > "$MAN.tmp" 2>/dev/null || true
+    # Remove only the same tool+arch row, keep other archs
+    awk -v t="$TOOL" -v a="$ARCH" '!($1==t && $3==a)' "$MAN" > "$MAN.tmp" 2>/dev/null || true
     printf '%s %s %s %s %s %s %s\n' \
         "$TOOL" "$VER" "$ARCH" "$REV" "$SHASUM" "$TAG" "$ASSET" >> "$MAN.tmp"
     mv "$MAN.tmp" "$MAN"
-    echo "[OK] manifest updated for $TOOL ($TAG)"
+    echo "[OK] manifest updated for $TOOL ($TAG, arch $ARCH)"
 }
 
 # ----------------------------------------------------------
@@ -150,11 +181,14 @@ unzip_cmd() {
 # ----------------------------------------------------------
 fetch_tool() {
     TOOL="$1"
+    # Arch selector: explicit arg (armhf:busybox) or CROSS_ARCH (--target);
+    # otherwise native. Strict: never fall back to a different arch.
+    ARCH_REQ="${2:-$(detect_arch)}"
     MAN="$(manifest_path)"
-    LINE="$(grep "^$TOOL " "$MAN" 2>/dev/null | head -1)"
+    LINE="$(awk -v t="$TOOL" -v a="$ARCH_REQ" '$1==t && $3==a {print; exit}' "$MAN" 2>/dev/null)"
 
     [ -z "$LINE" ] && {
-        echo "[ERROR] no prebuilt entry for '$TOOL' in $MAN"
+        echo "[ERROR] no prebuilt entry for '$TOOL' (arch $ARCH_REQ) in $MAN"
         echo "        Compile it:   ./build-tools.sh --$TOOL"
         echo "        Or publish:   ./build-tools.sh --package-all && ./tools/publish.sh"
         return 1
@@ -198,6 +232,20 @@ fetch_tool() {
             echo "[ERROR] $b is not statically linked"
             return 1
         }
+        case "$ARCH_REQ" in
+            armhf|arm)
+                file "$OUT_DIR/$b" | grep -q "ARM" || {
+                    echo "[ERROR] $b is not an ARM binary"
+                    return 1
+                }
+            ;;
+            aarch64|arm64)
+                file "$OUT_DIR/$b" | grep -q "aarch64" || {
+                    echo "[ERROR] $b is not an aarch64 binary"
+                    return 1
+                }
+            ;;
+        esac
     done
 
     echo "[OK] $TOOL fetched from $TAG ($ASSET)"

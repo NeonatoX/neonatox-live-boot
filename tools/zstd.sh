@@ -9,15 +9,8 @@ NC='\033[0m'
 
 echo -e "${YELLOW}[INFO]${NC} Searching for musl compiler..."
 
-for cc in musl-gcc x86_64-linux-musl-gcc; do
-    MUSLGCC=$(command -v "$cc" 2>/dev/null || true)
-    [ -n "$MUSLGCC" ] && break
-done
-
-if [ -z "$MUSLGCC" ]; then
-    echo -e "${RED}[ERROR]${NC} musl compiler not found in PATH" >&2
-    exit 1
-fi
+. "$TOOLS_DIR/lib-cross.sh"
+resolve_compiler || exit 1
 
 echo -e "${YELLOW}[INFO]${NC} Using compiler: $MUSLGCC"
 
@@ -44,7 +37,7 @@ echo -e "${YELLOW}[INFO]${NC} Configuring static zstd..."
 JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 
 echo -e "${YELLOW}[INFO]${NC} Compiling..."
-CFLAGS="-DZSTD_NO_TERMINAL_GUARD -Os -s" \
+CFLAGS="-DZSTD_NO_TERMINAL_GUARD -Os -s -fno-link-libatomic" \
 CC="$MUSLGCC" ZSTD_LIBS="-static" LDFLAGS="-static" \
 make -j$JOBS -C programs zstd
 

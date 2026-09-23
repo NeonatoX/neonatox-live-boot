@@ -9,15 +9,8 @@ NC='\033[0m'
 
 echo -e "${YELLOW}[INFO]${NC} Searching for musl compiler..."
 
-for cc in musl-gcc x86_64-linux-musl-gcc; do
-    MUSLGCC=$(command -v "$cc" 2>/dev/null || true)
-    [ -n "$MUSLGCC" ] && break
-done
-
-if [ -z "$MUSLGCC" ]; then
-    echo -e "${RED}[ERROR]${NC} musl compiler not found in PATH" >&2
-    exit 1
-fi
+. "$TOOLS_DIR/lib-cross.sh"
+resolve_compiler || exit 1
 
 echo -e "${YELLOW}[INFO]${NC} Using compiler: $MUSLGCC"
 
@@ -42,8 +35,8 @@ echo -e "${YELLOW}[INFO]${NC} Configuring static Dropbear..."
 
 [ -f Makefile ] && make distclean || true
 
-CC="$MUSLGCC" CFLAGS="-static -Os -s" LDFLAGS="-static" \
-./configure --host=x86_64-linux-musl --enable-static --disable-shared \
+CC="$MUSLGCC" CFLAGS="-static -Os -s -fno-link-libatomic" LDFLAGS="-static -fno-link-libatomic" \
+./configure --host="$TOOLCHAIN_HOST" --enable-static --disable-shared \
             --disable-zlib --prefix=/
 
 JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
