@@ -15,7 +15,6 @@ docdir  = join_paths(datadir, 'doc', 'mkinitramfs')
 # Fuentes a instalar
 mkinitramfs_src = files('src/mkinitramfs')
 lsinitramfs_src = files('src/lsinitramfs')
-initin_src = files('data/init.in')
 
 # Script principal
 install_data(
@@ -31,12 +30,7 @@ install_data(
   install_mode : 'rwxr-xr-x'
 )
 
-# init del initramfs
-install_data(
-  initin_src,
-  install_dir : join_paths(datadir, 'mkinitramfs'),
-  install_mode : 'rwxr-xr-x'
-)
+# init del initramfs: lo aporta neonatox-live-boot (init unificado, todos los perfiles)
 
 # Hooks
 install_subdir(

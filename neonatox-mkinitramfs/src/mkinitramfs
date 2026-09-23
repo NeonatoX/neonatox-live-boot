@@ -10,9 +10,9 @@ Opciones:
   -p, --profile PROFILE Perfil: disk, live, netinstall, embedded (por defecto: disk)
   -o, --output FILE     Ruta de salida (por defecto: /boot/initrd-*); con --profile embedded
                         es el DIRECTORIO destino del sysroot
-  --tools-dir DIR       Directorio con binarios estáticos (busybox; obligatorio live/netinstall, opcional disk)
+  --tools-dir DIR       Directorio con binarios estáticos (busybox; obligatorio live/netinstall/embedded, opcional disk)
   --staging DIR         Directorio de trabajo temporal
-  --neonatox-dir DIR    Ruta a neonatox-live-boot (lib/ + libexec/)
+  --neonatox-dir DIR    Ruta a neonatox-live-boot (init + lib/ + libexec/; requerido disk/live/netinstall/embedded)
   --hooks-dir DIR       Directorio adicional de hooks (proyecto)
    --xz-extreme          Usar compresión xz --extreme
    --decompress-kernel-modules  Descomprimir .ko.zst/.ko.gz/.ko.xz (default: skip — kernel las carga directamente)
@@ -87,30 +87,24 @@ case "$COMPRESS" in
   *) echo "Error: compresión '$COMPRESS' no soportada. Use: gz, xz, zstd"; exit 1 ;;
 esac
 
-if [ "$PROFILE" != "disk" ]; then
-  if [ -z "$NEONATOX_DIR" ]; then
-    for d in /usr/share/neonatox-boot /usr/local/share/neonatox-boot; do
-      [ -d "$d" ] && { NEONATOX_DIR="$d"; break; }
-    done
-  fi
-  if [ -z "$NEONATOX_DIR" ] || [ ! -f "$NEONATOX_DIR/init" ]; then
-    echo "Error: --neonatox-dir requerido para perfil '$PROFILE' (no se encontró init)"
-    exit 1
-  fi
+if [ -z "$NEONATOX_DIR" ]; then
+  for d in /usr/share/neonatox-boot /usr/local/share/neonatox-boot; do
+    [ -d "$d" ] && { NEONATOX_DIR="$d"; break; }
+  done
+fi
+if [ -z "$NEONATOX_DIR" ] || [ ! -f "$NEONATOX_DIR/init" ]; then
+  echo "Error: --neonatox-dir requerido para perfil '$PROFILE' (no se encontró init)"
+  exit 1
 fi
 
 INITRAMFS_FILE="${CUSTOM_OUTPUT:-/boot/initrd-${KERNEL_VERSION}-${ARCH}${RELEASE:+-${RELEASE}}}"
 
 SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-if [ -f "$SELF_DIR/../data/init.in" ] && [ -d "$SELF_DIR/../data/hooks" ]; then
-  # Uso en-tree (repositorio/subtree): data/ junto al script
-  DATADIR=$(cd "$SELF_DIR/../data" && pwd)
-  INITIN=init.in
-  HOOKDIR="$DATADIR/hooks"
+if [ -d "$SELF_DIR/../data/hooks" ]; then
+  # Uso en-tree (repositorio/subtree): data/hooks junto al script
+  HOOKDIR=$(cd "$SELF_DIR/../data/hooks" && pwd)
 else
   # Instalación de sistema via meson
-  DATADIR=/usr/share/mkinitramfs
-  INITIN=init.in
   HOOKDIR=/usr/share/mkinitramfs/hooks
 fi
 
@@ -172,14 +166,11 @@ fi
 # ----------------------------------------------------------
 # INIT + LIBRARIES
 # ----------------------------------------------------------
-if [ "$PROFILE" = "disk" ]; then
-  install -m0755 "$DATADIR/$INITIN" "$WDIR/init"
-else
-  install -m0755 "$NEONATOX_DIR/init" "$WDIR/init"
-  cp -r "$NEONATOX_DIR/lib" "$WDIR/usr/"
-  cp -r "$NEONATOX_DIR/libexec" "$WDIR/"
-  chmod 0755 "$WDIR/libexec"/* 2>/dev/null || true
-fi
+# Init unificado (todos los perfiles): init + lib/ + libexec/ del proyecto
+install -m0755 "$NEONATOX_DIR/init" "$WDIR/init"
+cp -r "$NEONATOX_DIR/lib" "$WDIR/usr/"
+cp -r "$NEONATOX_DIR/libexec" "$WDIR/"
+chmod 0755 "$WDIR/libexec"/* 2>/dev/null || true
 
 run_hooks pre-binaries
 
@@ -222,39 +213,22 @@ copy() {
 
 # ----------------------------------------------------------
 # SELECCIÓN DE BUSYBOX
-# live/netinstall: busybox obligatorio (error si falta, nunca glibc)
-# disk: TOOLS_DIR/busybox → busybox de PATH (estático + applets críticos) → glibc
+# Todos los perfiles (disk incluido, desde P0 — init unificado):
+# busybox ESTÁTICO obligatorio desde --tools-dir. El fallback glibc
+# (ldd + coreutils del host) era del antiguo init.in y no cubre los
+# applets del init unificado (setsid/grep/seq): queda como código
+# legacy inalcanzable (ver bloques [ -z "$BB_BIN" ] posteriores).
 # ----------------------------------------------------------
 BB_BIN=""
-CRITICAL_APPLETS="switch_root mount umount mkdir mknod sh cat killall sleep modprobe"
-
-# Usa el busybox del PATH solo si es estático y trae los applets que el
-# init de disk (data/init.in) y udev necesitan en runtime.
-pick_path_busybox() {
-    local bb missing=""
-    bb=$(command -v busybox 2>/dev/null) || return 1
-    file "$bb" 2>/dev/null | grep -q "statically linked" || return 1
-    for app in $CRITICAL_APPLETS; do
-        "$bb" --list 2>/dev/null | grep -qx "$app" || missing="$missing $app"
-    done
-    [ -n "$missing" ] && return 1
-    BB_BIN="$bb"
-}
 
 case "$PROFILE" in
-    live|netinstall|embedded)
+    disk|live|netinstall|embedded)
         [ -n "$TOOLS_DIR" ] && [ -f "$TOOLS_DIR/busybox" ] && BB_BIN="$TOOLS_DIR/busybox"
         if [ -z "$BB_BIN" ]; then
             echo "Error: el perfil $PROFILE requiere busybox en --tools-dir" >&2
             echo "Ejecute ./build-tools.sh --busybox o use un release de tools" >&2
             rm -rf "$WDIR"
             exit 1
-        fi
-        ;;
-    disk)
-        [ -n "$TOOLS_DIR" ] && [ -f "$TOOLS_DIR/busybox" ] && BB_BIN="$TOOLS_DIR/busybox"
-        if [ -z "$BB_BIN" ]; then
-            pick_path_busybox || true
         fi
         ;;
 esac
@@ -282,25 +256,23 @@ if [ -n "$BB_BIN" ]; then
   [ -x "$WDIR/usr/bin/bash" ] && ln -sf bash "$WDIR/usr/bin/sh"
 fi
 
-# PROFILE_REQUIRES: tools estáticas (live/netinstall)
-if [ "$PROFILE" != "disk" ]; then
-  case "$PROFILE" in
-    netinstall) PROFILE_LIB="$NEONATOX_DIR/lib/init-net.sh" ;;
-    *)          PROFILE_LIB="$NEONATOX_DIR/lib/init-${PROFILE}.sh" ;;
-  esac
-  if [ -f "$PROFILE_LIB" ]; then
-    REQUIRES=$(grep '^PROFILE_REQUIRES=' "$PROFILE_LIB" | cut -d'"' -f2)
-    for tool in $REQUIRES; do
-      if [ -n "$TOOLS_DIR" ] && [ -f "$TOOLS_DIR/$tool" ]; then
-        install -m0755 "$TOOLS_DIR/$tool" "$WDIR/usr/bin/$tool"
-      fi
-    done
-  fi
+# PROFILE_REQUIRES: tools estáticas del perfil (disk declara "" → no-op)
+case "$PROFILE" in
+  netinstall) PROFILE_LIB="$NEONATOX_DIR/lib/init-net.sh" ;;
+  *)          PROFILE_LIB="$NEONATOX_DIR/lib/init-${PROFILE}.sh" ;;
+esac
+if [ -f "$PROFILE_LIB" ]; then
+  REQUIRES=$(grep '^PROFILE_REQUIRES=' "$PROFILE_LIB" | cut -d'"' -f2)
+  for tool in $REQUIRES; do
+    if [ -n "$TOOLS_DIR" ] && [ -f "$TOOLS_DIR/$tool" ]; then
+      install -m0755 "$TOOLS_DIR/$tool" "$WDIR/usr/bin/$tool"
+    fi
+  done
 fi
 
-# ldd en musl es un wrapper (exec /lib/libc.so --list $@) que puede colgarse
-# con binarios glibc o estáticos. Con busybox se salta; solo llega aquí
-# el perfil disk sin busybox utilizable (fallback glibc clásico).
+# Fallback glibc legacy (previo a P0): con busybox obligatorio en todos los
+# perfiles estos bloques [ -z "$BB_BIN" ] son inalcanzables. Se conservan
+# por traza del formato init.in; eliminar en la limpieza 4b.
 if [ -z "$BB_BIN" ]; then
 for f in $binfiles; do
   [ -x "/usr/bin/$f" ] || continue

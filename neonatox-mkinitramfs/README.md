@@ -27,7 +27,7 @@ Installed files
 
 - `/usr/sbin/mkinitramfs` – initramfs generator
 - `/usr/sbin/lsinitramfs` – list initramfs contents
-- `/usr/share/mkinitramfs/init.in` – init script inside initramfs
+- `/usr/share/neonatox-boot/` – init unificado (init + lib/ + libexec/) aportado por neonatox-live-boot; el generador lo necesita para todos los perfiles (disk, live, netinstall, embedded)
 - `/usr/share/mkinitramfs/hooks/` – hooks directory
 
 Usage
