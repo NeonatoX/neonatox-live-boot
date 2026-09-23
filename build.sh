@@ -346,8 +346,8 @@ wpa_supplicant:wpa_supplicant zstd:zstd btrfsprogs:btrfs"
     # mkinitramfs --profile embedded → vierta el árbol
     MKINITRAMFS=""
     for cand in \
-        "$SCRIPT_DIR/neonatox-mkinitramfs/src/mkinitramfs" \
-        "$SCRIPT_DIR/../neonatox-mkinitramfs/src/mkinitramfs" \
+        "$SCRIPT_DIR/mkinitramfs/src/mkinitramfs" \
+        "$SCRIPT_DIR/../mkinitramfs/src/mkinitramfs" \
         /usr/sbin/mkinitramfs \
         /usr/bin/mkinitramfs; do
         if [ -x "$cand" ]; then
@@ -357,7 +357,7 @@ wpa_supplicant:wpa_supplicant zstd:zstd btrfsprogs:btrfs"
     done
     if [ -z "$MKINITRAMFS" ]; then
         echo -e "${RED}[ERROR]${NC} mkinitramfs no encontrado"
-        echo "Esperado en $SCRIPT_DIR/neonatox-mkinitramfs/src/mkinitramfs"
+        echo "Esperado en $SCRIPT_DIR/mkinitramfs/src/mkinitramfs"
         exit 1
     fi
 
@@ -823,8 +823,8 @@ fi
 # ----------------------------------------------------------
 MKINITRAMFS=""
 for candidate in \
-    "$SCRIPT_DIR/neonatox-mkinitramfs/src/mkinitramfs" \
-    "$SCRIPT_DIR/../neonatox-mkinitramfs/src/mkinitramfs" \
+    "$SCRIPT_DIR/mkinitramfs/src/mkinitramfs" \
+    "$SCRIPT_DIR/../mkinitramfs/src/mkinitramfs" \
     /usr/sbin/mkinitramfs \
     /usr/bin/mkinitramfs; do
     if [ -x "$candidate" ]; then
@@ -835,8 +835,8 @@ done
 
 if [ -z "$MKINITRAMFS" ]; then
     echo -e "${RED}[ERROR]${NC} mkinitramfs not found"
-    echo "Expected at $SCRIPT_DIR/neonatox-mkinitramfs/src/mkinitramfs"
-    echo "or installed system-wide (neonatox-mkinitramfs)"
+    echo "Expected at $SCRIPT_DIR/mkinitramfs/src/mkinitramfs"
+    echo "or installed system-wide (mkinitramfs)"
     exit 1
 fi
 

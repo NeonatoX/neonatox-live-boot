@@ -2,7 +2,7 @@
 
 Documento de contrato entre el generador `mkinitramfs` (build-time) y el init
 unificado (runtime). Las partes que lo implementan viven en
-`neonatox-mkinitramfs/` (backend) y `initramfs/` (proyecto): los hooks del
+`mkinitramfs/` (backend) y `initramfs/` (proyecto): los hooks del
 proyecto se inyectan con `--hooks-dir initramfs/hooks`.
 
 ## Hook de build-time

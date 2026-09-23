@@ -89,7 +89,8 @@ esac
 
 if [ -z "$NEONATOX_DIR" ]; then
   for d in /usr/share/neonatox-boot /usr/local/share/neonatox-boot; do
-    [ -d "$d" ] && { NEONATOX_DIR="$d"; break; }
+    if [ -f "$d/init" ]; then NEONATOX_DIR="$d"; break; fi
+    if [ -f "$d/initramfs/init" ]; then NEONATOX_DIR="$d/initramfs"; break; fi
   done
 fi
 if [ -z "$NEONATOX_DIR" ] || [ ! -f "$NEONATOX_DIR/init" ]; then
@@ -103,8 +104,11 @@ SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if [ -d "$SELF_DIR/../data/hooks" ]; then
   # Uso en-tree (repositorio/subtree): data/hooks junto al script
   HOOKDIR=$(cd "$SELF_DIR/../data/hooks" && pwd)
+elif [ -d "$SELF_DIR/../share/mkinitramfs/hooks" ]; then
+  # Instalación de sistema (meson): hooks junto al instalado (prefix-aware)
+  HOOKDIR=$(cd "$SELF_DIR/../share/mkinitramfs/hooks" && pwd)
 else
-  # Instalación de sistema via meson
+  # Instalación de sistema (meson, prefix no estándar)
   HOOKDIR=/usr/share/mkinitramfs/hooks
 fi
 
