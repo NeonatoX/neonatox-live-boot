@@ -11,16 +11,25 @@ show_banner
 
 CMDLINE="$(cat /proc/cmdline)"
 
-# Modo horneado en build: la sysroot embedded lleva /etc/neonatox-mode y arranca
-# como raíz real (root=<dev> en cmdline) sin initramfs. El cmdline explícito
-# (netinstall=1) pisa el marcador; root= → disk SOLO sin marcador (initrd clásico).
+# Precedencia de MODE (contrato §5.2.6/P0b):
+#   1. netinstall=1 (cmdline explícito) — pisa cualquier marcador
+#   2. marcador /etc/neonatox-mode   (sysroot embedded horneado en build)
+#   3. root= (cualquier forma: /dev/, UUID=, PARTUUID=, LABEL=) — SOLO sin
+#      marcador → disk (initramfs clásico)
+#   4. live (default)
 MODE="live"
 if [ -f /etc/neonatox-mode ]; then
     MODE="$(cat /etc/neonatox-mode 2>/dev/null)"
     [ -n "$MODE" ] || MODE="live"
 fi
-echo "$CMDLINE" | grep -q "netinstall=1" && MODE="netinstall"
-case "$CMDLINE" in root=*|*" root="*) [ ! -f /etc/neonatox-mode ] && MODE="disk" ;; esac
+case " $CMDLINE " in
+    *" netinstall=1 "*) MODE="netinstall" ;;
+    *)
+        [ ! -f /etc/neonatox-mode ] && case " $CMDLINE " in
+            *" root="*) MODE="disk" ;;
+        esac
+        ;;
+esac
 
 case "$MODE" in
     live)       . /lib/init-live.sh ;;
