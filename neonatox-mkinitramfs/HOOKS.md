@@ -9,7 +9,8 @@ The hooks system allows adding custom functionality to the initramfs generation 
 | Phase | When | Purpose |
 |-------|------|---------|
 | `pre-binaries` | After creating basic structure, before copying binaries | Add custom binaries, libraries, or configurations |
-| `pre-pack` | After all binaries copied, before cpio packaging | Modify files, add additional content |
+| `post-binaries` | After copying binaries/PROFILE_REQUIRES, before kernel modules | Modify config / add files with a semantics after the toolchain is in place |
+| `pre-pack` | After all binaries and modules copied, before cpio packaging | Modify files, add additional content |
 | `pre-microcode` | Before embedding CPU microcode | Modify initramfs before microcode prepending |
 
 ## Hook Directory
@@ -19,6 +20,8 @@ Hooks must be placed in: `/usr/share/mkinitramfs/hooks/<phase>/`
 ```
 /usr/share/mkinitramfs/hooks/
 ├── pre-binaries/
+│   └── <hook-script>
+├── post-binaries/
 │   └── <hook-script>
 ├── pre-pack/
 │   └── <hook-script>

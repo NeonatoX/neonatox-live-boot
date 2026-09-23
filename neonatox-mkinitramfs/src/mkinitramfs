@@ -364,6 +364,8 @@ fi
 # MÓDULOS DEL KERNEL POR PERFIL
 # (embedded: sysroot SIN kernel — no se copian módulos)
 # ----------------------------------------------------------
+run_hooks post-binaries
+
 if [ -n "$KERNEL_VERSION" ] && [ "$PROFILE" != "embedded" ]; then
   case "$PROFILE" in
     disk)
