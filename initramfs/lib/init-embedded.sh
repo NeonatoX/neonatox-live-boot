@@ -73,12 +73,22 @@ ntp_sync() {
 }
 
 setup_ssh() {
-    mkdir -p /etc
-    echo "root:x:0:0:root:/root:/bin/sh" > /etc/passwd
+    mkdir -p /etc /root /etc/dropbear
+    # passwd/group/shadow horneados por imagen (hook 20-passwd-shadow + 62-embedded-etc).
+    # NO se pisan en runtime: solo se asegura la entrada root y su hash.
+    if [ -s /etc/passwd ]; then
+        grep -q '^root:' /etc/passwd || echo "root:x:0:0:root:/root:/bin/sh" >> /etc/passwd
+    else
+        echo "root:x:0:0:root:/root:/bin/sh" > /etc/passwd
+    fi
     ROOT_HASH="$(printf '%s' 'neonatox' | cryptpw -m sha512)"
-    echo "root:$ROOT_HASH:1:0:99999:7:::" > /etc/shadow
+    if [ -s /etc/shadow ]; then
+        grep -q '^root:' /etc/shadow || echo "root:$ROOT_HASH:1:0:99999:7:::" >> /etc/shadow
+    else
+        echo "root:$ROOT_HASH:1:0:99999:7:::" > /etc/shadow
+    fi
+    chmod 0600 /etc/shadow 2>/dev/null || true
     echo -e "${GREEN}[OK]${NC} root password: neonatox"
-    mkdir -p /etc/dropbear
     # Host keys horneadas por imagen (hook pre-pack/55-ssh-hostkeys).
     # Solo se regeneran como fallback si la imagen no las trae.
     if [ ! -f /etc/dropbear/dropbear_ed25519_host_key ]; then

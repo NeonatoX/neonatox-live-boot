@@ -30,6 +30,7 @@ Hooks del proyecto (`initramfs/hooks/`):
 | `50-live-config` | pre-pack | live | `live-config.sh` + `rootfs.sha256` desde EXTRA_DIR |
 | `55-ssh-hostkeys` | pre-pack | netinstall, embedded | keys dropbear POR IMAGEN + marcador `/etc/neonatox-mode` (embedded) |
 | `60-netinstall-config` | pre-pack | netinstall, embedded | wifi-config, disk-wizard, udhcpc, profile, fakes nhopkg |
+| `62-embedded-etc` | pre-pack | embedded | skeleton `/etc` mínimo vendorizado de `initramfs/etc-embed/` (passwd, group, shells, os-release, lsb-release, resolv.conf, profile LFS); gana al 60 |
 | `70-bootstrap` | pre-pack | netinstall | micro-init + nhopkg clonado en build |
 
 ## Fases runtime (`initramfs/libexec/`)

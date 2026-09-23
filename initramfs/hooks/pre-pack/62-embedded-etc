@@ -1,0 +1,22 @@
+#!/bin/sh
+# 62-embedded-etc — skeleton /etc MÍNIMO para la sysroot embedded
+# (vendorizado de neonatox-bootstrap/bootstrap/data/etc, conjunto "versión mínima"):
+#   passwd, group, shells, os-release, lsb-release, resolv.conf, profile.
+# Corre DESPUÉS del 60-netinstall-config para que su /etc/profile (mínimo)
+# quede sustituido por el profile LFS completo (embedded trae bash como sh).
+# No va profile.d/ (usa `locale`+`export -f`), ni bashrc/inputrc, ni skel/,
+# ni polkit-1/, ni default/grub (el sysroot no los necesita).
+WDIR="$1"
+[ -n "$WDIR" ] || exit 1
+
+[ "$PROFILE" != "embedded" ] && exit 0
+
+SRC="$NEONATOX_DIR/etc-embed"
+[ -d "$SRC" ] || { echo "[WARN] 62-embedded-etc: $SRC no existe (se omite)" >&2; exit 0; }
+
+mkdir -p "$WDIR/etc"
+for f in passwd group shells os-release lsb-release resolv.conf profile; do
+    [ -f "$SRC/$f" ] && install -m 0644 "$SRC/$f" "$WDIR/etc/$f"
+done
+
+exit 0
