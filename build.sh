@@ -18,7 +18,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-NLB_VERSION="v0.9"
+NLB_VERSION="v0.10"
 
 # ---------------------------------------------
 # Default values (safe fallback)
@@ -96,6 +96,20 @@ check_tmp_space
 ISO_DIR="$WORKDIR/iso"
 OUTDIR="$SCRIPT_DIR/output"
 INITRAMFS_STAGING="$WORKDIR/initramfs"
+
+# ---------------------------------------------
+# Artifact permissions
+# ---------------------------------------------
+# build.sh runs as root, so everything it creates in output/ ends up
+# root:root (0755/0644) and a normal user cannot copy, delete or clean
+# the artifacts. Relax them to world read/write; X only applies to
+# directories and files that are already executable.
+relax_perms() {
+    for p in "$@"; do
+        [ -e "$p" ] || continue
+        chmod -R a+rwX "$p" 2>/dev/null || true
+    done
+}
 
 BOOT_DIR="$ISO_DIR/boot"
 GRUB_DIR="$BOOT_DIR/grub"
@@ -395,6 +409,9 @@ wpa_supplicant:wpa_supplicant zstd:zstd btrfsprogs:btrfs"
     echo "  ssh keys: generadas por imagen (fingerprint estable entre boots)"
     echo "  kernel  : NO incluido (añade el tuyo)"
     echo "============================================"
+
+    # world rw (recursive): the sysroot is built as root
+    relax_perms "$OUTDIR"
     exit 0
 fi
 
@@ -508,6 +525,9 @@ if [ "$MAKE_ISO_ONLY" = true ]; then
     echo -e "${YELLOW}ISO READY${NC}:"
     echo -e "${GREEN}$OUTDIR/${ISO_NAME}-${VERSION}-${ARCH}.iso${NC}"
     echo "============================================"
+
+    # world rw (recursive): the ISO is built as root
+    relax_perms "$OUTDIR"
     exit 0
 fi
 
@@ -518,6 +538,10 @@ CURRENT_SECTION="cleanup and directory setup"
 
 rm -rf "$WORKDIR"
 mkdir -p "$ISO_DIR" "$OUTDIR" "$BOOT_DIR" "$GRUB_DIR" "$EFI_DIR"
+
+# output/ is created by root: make it writable by any user even if the
+# build fails halfway (a previous run may have left root-owned files).
+relax_perms "$OUTDIR"
 
 THEME_DIR="$GRUB_DIR/theme"
 mkdir -p "$THEME_DIR"
@@ -1046,4 +1070,7 @@ echo "============================================"
 echo -e "${YELLOW}ISO READY${NC}:"
 echo -e "${GREEN}$OUTDIR/${ISO_NAME}-${VERSION}-${ARCH}.iso${NC}"
 echo "============================================"
+
+# world rw (recursive): the ISO is built as root
+relax_perms "$OUTDIR"
 fi

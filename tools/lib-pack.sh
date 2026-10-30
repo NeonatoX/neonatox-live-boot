@@ -6,6 +6,19 @@
 # ==========================================================
 
 # ----------------------------------------------------------
+# Artifact permissions: tools/output and tools/dist must be
+# world read/write, so a normal user can copy, delete or clean
+# them without sudo. X only applies to directories and files
+# that are already executable.
+# ----------------------------------------------------------
+relax_perms() {
+    for p in "$@"; do
+        [ -e "$p" ] || continue
+        chmod -R a+rwX "$p" 2>/dev/null || true
+    done
+}
+
+# ----------------------------------------------------------
 # Detect architecture.
 # Cross (--target) sets CROSS_ARCH explicitly and it wins;
 # otherwise it's the HOST architecture (real machine).
@@ -133,6 +146,8 @@ package_tool() {
     }
     rm -rf "$TMP"
 
+    relax_perms "$ZIP" "$DIST"
+
     echo "[OK] $TOOL -> $ZIP"
 }
 
@@ -159,6 +174,7 @@ manifest_add() {
     printf '%s %s %s %s %s %s %s\n' \
         "$TOOL" "$VER" "$ARCH" "$REV" "$SHASUM" "$TAG" "$ASSET" >> "$MAN.tmp"
     mv "$MAN.tmp" "$MAN"
+    relax_perms "$MAN"
     echo "[OK] manifest updated for $TOOL ($TAG, arch $ARCH)"
 }
 
@@ -248,5 +264,6 @@ fetch_tool() {
         esac
     done
 
+    relax_perms "$OUT_DIR"
     echo "[OK] $TOOL fetched from $TAG ($ASSET)"
 }

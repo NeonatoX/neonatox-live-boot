@@ -1,7 +1,7 @@
 # init-common.sh — shared functions for all profiles
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 HOME=/root; TERM=linux
-NLB_VERSION="v0.9"
+NLB_VERSION="v0.10"
 
 trap 'echo -e "\n${YELLOW}[SIGINT]${NC} Emergency shell"; run_shell' INT
 

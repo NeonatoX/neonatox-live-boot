@@ -7,7 +7,7 @@ set -e
 # ==========================================================
 
 PATH="$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-NLB_VERSION="v0.9"
+NLB_VERSION="v0.10"
 
 # Colors
 RED='\033[0;31m'
@@ -124,6 +124,7 @@ build_tool() {
         cp "$(command -v busybox)" "$OUT_DIR/busybox"
         BUSYBOX_VER="$("$OUT_DIR/busybox" 2>&1 | head -1 | sed -n 's/.*BusyBox v\([0-9][0-9.]*\).*/\1/p')"
         echo "${BUSYBOX_VER:-system}" > "$OUT_DIR/busybox.version"
+        relax_perms "$OUT_DIR"
         echo -e "${GREEN}[OK]${NC} busybox ready at $OUT_DIR/busybox"
         return 0
     fi
@@ -140,6 +141,8 @@ build_tool() {
         echo -e "${RED}[ERROR]${NC} $TOOL artifacts failed architecture/static validation"
         exit 1
     }
+
+    relax_perms "$OUT_DIR"
 
     echo -e "${GREEN}[OK]${NC} $TOOL finished"
     echo

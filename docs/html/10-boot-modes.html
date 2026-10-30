@@ -8,165 +8,285 @@
 
 <header>
   <h1>Boot Modes - Neonatox Live Boot</h1>
-  <p>Official boot options and kernel flags for the Neonatox Live system</p>
+  <p>Official boot options and kernel flags for the Neonatox Live system.</p>
 </header>
 
 <main>
 
 <h2>Overview</h2>
 <p>
-Neonatox Live Boot uses a fully custom <strong>initramfs</strong> designed for
-robust hardware detection, optional RAM-based overlays, Ventoy compatibility,
-and controlled debugging.
+Neonatox Live Boot uses a fully custom <strong>initramfs</strong> designed for robust hardware detection, optional RAM-based overlays, Ventoy compatibility, and controlled debugging.
 </p>
-
 <p>
 All boot flags are parsed and acted upon <strong>before switch_root</strong>.
 </p>
-
+<p>
+Since v0.10 the initramfs ships a single orchestrator (<code>/init</code>) that selects a <strong>profile</strong> at boot time. The four profiles share the same phase pipeline (<code>/libexec/</code>) but load different libraries from <code>/lib/</code>.
+</p>
+<h2>Mode Selection</h2>
+<p>
+The mode is resolved in this order:
+</p>
+<table border="1" cellspacing="0" cellpadding="4">
+<tr>
+<th>Priority</th>
+<th>Condition</th>
+<th>Mode</th>
+</tr>
+<tr>
+<td>1</td>
+<td><code>netinstall=1</code> on the kernel command line</td>
+<td><code>netinstall</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>/etc/neonatox-mode</code> marker present</td>
+<td>its content (<code>embedded</code>)</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>root=</code> (any form) <strong>and no marker</strong></td>
+<td><code>disk</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td>none of the above</td>
+<td><code>live</code> (default)</td>
+</tr>
+</table>
+<p>
+A <code>root=</code> entry never overrides <code>netinstall=1</code>, and an embedded marker always wins over <code>root=</code>.
+</p>
 <hr>
-
-<h2>Available Boot Modes</h2>
-
-<h3>1. Live (Default)</h3>
+<h2>1. Live (Default)</h2>
 <pre>
 linux /boot/vmlinuz quiet loglevel=3
 </pre>
-
 <ul>
-<li>Fast boot</li>
-<li>tmpfs overlay (RAM)</li>
-<li>No interactive configuration</li>
-<li>No integrity re-check</li>
+  <li>Fast boot</li>
+  <li>tmpfs overlay (RAM)</li>
+  <li>No interactive configuration</li>
+  <li>No integrity re-check</li>
+  <li>Ends with <code>switch_root</code> into systemd</li>
 </ul>
-
-<hr>
-
-<h3>2. Live (Language & Live User Config)</h3>
+<h3>Live (Language &amp; Live User Config)</h3>
 <pre>
-linux /boot/vmlinuz quiet <span class="flag">neoconfig=1</span>
+linux /boot/vmlinuz quiet neoconfig=1
 </pre>
-
 <ul>
-<li>Language selection</li>
-<li>Keyboard layout</li>
-<li>Timezone</li>
-<li>Live user setup</li>
+  <li>Language selection</li>
+  <li>Keyboard layout</li>
+  <li>Timezone</li>
+  <li>Live user setup</li>
 </ul>
-
-<hr>
-
-<h3>3. Live (Failsafe graphics)</h3>
+<h3>Live (Failsafe graphics)</h3>
 <pre>
 linux /boot/vmlinuz quiet nomodeset vga=normal
 </pre>
-
 <ul>
-<li>Disables KMS</li>
-<li>Recommended for legacy GPUs and virtual machines</li>
+  <li>Disables KMS</li>
+  <li>Recommended for legacy GPUs and virtual machines</li>
 </ul>
-
-<hr>
-
-<h3>4. Live (Kernel DEBUG)</h3>
+<h3>Live (Kernel DEBUG)</h3>
 <pre>
-linux /boot/vmlinuz <span class="flag">debug=1</span> loglevel=7
+linux /boot/vmlinuz debug=1 loglevel=7
 </pre>
-
 <ul>
-<li>Maximum kernel verbosity</li>
-<li>Driver and hardware diagnostics</li>
-<li>Does not affect initramfs logic</li>
+  <li>Maximum kernel verbosity</li>
+  <li>Driver and hardware diagnostics</li>
+  <li>Does not affect initramfs logic</li>
 </ul>
-
-<hr>
-
-<h3>5. Live (Initramfs Debug Levels)</h3>
-
+<h3>Live (Initramfs Debug Levels)</h3>
 <p>
-Neonatox provides <strong>three deterministic initramfs debug breakpoints</strong>.
-Each level stops the boot process at a precise stage.
+Neonatox provides <strong>three deterministic initramfs debug breakpoints</strong>. Each level stops the boot process at a precise stage.
 </p>
-
 <pre>
-linux /boot/vmlinuz <span class="flag">initrd_debug=1|2|3</span>
+linux /boot/vmlinuz initrd_debug=1|2|3
 </pre>
-
 <h4>initrd_debug=1 – Early initramfs</h4>
 <ul>
-<li>Console and virtual filesystems mounted</li>
-<li>Kernel modules loaded</li>
-<li>Before ZRAM and device scan</li>
+  <li>Console and virtual filesystems mounted</li>
+  <li>Kernel modules loaded</li>
+  <li>Before ZRAM and device scan</li>
 </ul>
-
-<h4>initrd_debug=2 – Storage & integrity stage</h4>
+<h4>initrd_debug=2 – Storage &amp; integrity stage</h4>
 <ul>
-<li>ZRAM overlay configured (if enabled)</li>
-<li>Ventoy environment detected</li>
-<li>Devices scanned</li>
-<li>rootfs.squashfs located and verified</li>
-<li>squashfs mounted</li>
+  <li>ZRAM overlay configured (if enabled)</li>
+  <li>Ventoy environment detected</li>
+  <li>Devices scanned</li>
+  <li>rootfs.squashfs located and verified</li>
+  <li>squashfs mounted</li>
 </ul>
-
 <h4>initrd_debug=3 – Pre-switch_root</h4>
 <ul>
-<li>Overlay filesystem mounted</li>
-<li>newroot prepared</li>
-<li>Live configuration executed (if enabled)</li>
-<li>System ready to switch_root</li>
+  <li>Overlay filesystem mounted</li>
+  <li>newroot prepared</li>
+  <li>Live configuration executed (if enabled)</li>
+  <li>System ready to switch_root</li>
 </ul>
-
-<div class="note">
-<strong>Note:</strong> All debug levels drop into an emergency shell.
-Boot will not continue automatically.
-</div>
-
+<p>
+<strong>Note:</strong> All debug levels drop into an emergency shell. Boot will not continue automatically.
+</p>
 <hr>
-
-<h2>Optional Performance & Safety Flags</h2>
-
+<h2>2. Netinstall</h2>
+<pre>
+linux /boot/vmlinuz quiet netinstall=1
+</pre>
+<ul>
+  <li>Loads the <code>netinstall</code> profile (<code>init-live.sh</code> + <code>init-net.sh</code>)</li>
+  <li>Brings up every network interface with DHCP</li>
+  <li>Optional WiFi (<code>wifi_ssid=</code> / <code>wifi_psk=</code>) and NTP</li>
+  <li>Starts Dropbear SSH (<code>root</code> / <code>neonatox</code> by default)</li>
+  <li>Does <strong>not</strong> mount a squashfs root and does <strong>not</strong> <code>switch_root</code></li>
+  <li>Ends in an interactive shell showing the assigned IP and a quick install</li>
+</ul>
+<p>
+guide
+</p>
+<p>
+<code>netinstall=1</code> has the highest precedence: it wins over a baked marker and over any <code>root=</code> argument.
+</p>
+<hr>
+<h2>3. Disk</h2>
+<pre>
+linux /boot/vmlinuz root=UUID=&lt;uuid&gt; ro
+</pre>
+<p>
+Any <code>root=</code> form is accepted: <code>/dev/sdX</code>, <code>UUID=</code>, <code>PARTUUID=</code> or <code>LABEL=</code>.
+</p>
+<ul>
+  <li>Loads the <code>disk</code> profile (<code>init-disk.sh</code>)</li>
+  <li>Uses devtmpfs instead of <code>mdev -s</code></li>
+  <li>Starts the host <code>udevd</code>, activates RAID and LVM</li>
+  <li>Honors <code>rootdelay=</code>, <code>rootfstype=</code>, <code>rootflags=</code>, <code>resume=</code> and <code>splash=</code></li>
+  <li>Mounts the real root on <code>/.root</code> and ends with <code>switch_root</code> into <code>/sbin/init</code></li>
+</ul>
+<p>
+(or the path given by <code>init=</code>)
+</p>
+<p>
+<code>root=</code> is only treated as <code>disk</code> when there is <strong>no</strong> <code>/etc/neonatox-mode</code> marker, so embedded images booting with <code>root=/dev/mmcblk0pN</code> are not misdetected.
+</p>
+<hr>
+<h2>4. Embedded</h2>
+<p>
+Embedded images bake a marker at build time:
+</p>
+<pre>
+/etc/neonatox-mode  →  embedded
+</pre>
+<ul>
+  <li>Loads the <code>embedded</code> profile (<code>init-embedded.sh</code>)</li>
+  <li>Network + WiFi + NTP + Dropbear (same phase as <code>netinstall</code>)</li>
+  <li>Ships filesystem tools (<code>btrfs</code>, <code>mkfs.btrfs</code>, <code>mkfs.ext4</code>, <code>fsck.ext4</code>, <code>zstd</code>)</li>
+  <li>No kernel modules are copied into the sysroot</li>
+  <li>Ends in an interactive shell on the target device</li>
+</ul>
+<p>
+The marker takes precedence over <code>root=</code>, which is required because embedded targets normally boot with <code>root=/dev/…</code>.
+</p>
+<hr>
+<h2>Optional Performance &amp; Safety Flags</h2>
 <h3>ZRAM Overlay</h3>
 <pre>
-linux /boot/vmlinuz <span class="flag">zram=1</span>
+linux /boot/vmlinuz zram=1
 </pre>
-
 <ul>
-<li>Uses compressed RAM as overlay upper layer</li>
-<li>Automatic sizing based on total memory</li>
-<li>lz4 compression when available</li>
-<li>Falls back to tmpfs if unavailable</li>
+  <li>Uses compressed RAM as overlay upper layer</li>
+  <li>Automatic sizing based on total memory</li>
+  <li>lz4 compression when available</li>
+  <li>Falls back to tmpfs if unavailable</li>
 </ul>
-
-<hr>
-
 <h3>RootFS Integrity Verification</h3>
 <pre>
-linux /boot/vmlinuz <span class="flag">checkhash=1</span>
+linux /boot/vmlinuz checkhash=1
 </pre>
-
 <ul>
-<li>Full SHA256 verification of rootfs.squashfs</li>
-<li>Applies to both physical media and Ventoy ISOs</li>
-<li>Slower but ensures full integrity</li>
+  <li>Full SHA256 verification of rootfs.squashfs</li>
+  <li>Applies to both physical media and Ventoy ISOs</li>
+  <li>Slower but ensures full integrity</li>
 </ul>
-
 <hr>
-
 <h2>Supported Kernel Flags</h2>
-<ul>
-<li><span class="flag">neoconfig=1</span> – Interactive live setup</li>
-<li><span class="flag">zram=1</span> – Enable ZRAM overlay</li>
-<li><span class="flag">checkhash=1</span> – Full rootfs hash verification</li>
-<li><span class="flag">initrd_debug=1</span> – Early initramfs shell</li>
-<li><span class="flag">initrd_debug=2</span> – Storage & integrity shell</li>
-<li><span class="flag">initrd_debug=3</span> – Pre-switch_root shell</li>
-<li><span class="flag">debug=1</span> – Kernel debug</li>
-<li><span class="flag">loglevel=7</span> – Maximum kernel verbosity</li>
-<li><span class="flag">nomodeset</span> – Disable KMS</li>
-</ul>
-
+<table border="1" cellspacing="0" cellpadding="4">
+<tr>
+<th>Flag</th>
+<th>Effect</th>
+</tr>
+<tr>
+<td><code>netinstall=1</code></td>
+<td>Select the <code>netinstall</code> profile</td>
+</tr>
+<tr>
+<td><code>root=</code></td>
+<td>Select the <code>disk</code> profile (only without a mode marker)</td>
+</tr>
+<tr>
+<td><code>rootdelay=</code></td>
+<td>Seconds to wait for the root device (<code>disk</code>)</td>
+</tr>
+<tr>
+<td><code>rootfstype=</code></td>
+<td>Root filesystem type, default <code>auto</code> (<code>disk</code>)</td>
+</tr>
+<tr>
+<td><code>rootflags=</code></td>
+<td>Extra mount options for the root filesystem (<code>disk</code>)</td>
+</tr>
+<tr>
+<td><code>resume=</code></td>
+<td>Resume device for hibernation (<code>disk</code>)</td>
+</tr>
+<tr>
+<td><code>noresume</code></td>
+<td>Skip hibernation resume (<code>disk</code>)</td>
+</tr>
+<tr>
+<td><code>splash=plymouth</code></td>
+<td>Plymouth boot splash (<code>disk</code>)</td>
+</tr>
+<tr>
+<td><code>init=</code></td>
+<td>Path to the init to execute after <code>switch_root</code> (<code>disk</code>)</td>
+</tr>
+<tr>
+<td><code>neoconfig=1</code></td>
+<td>Interactive live setup</td>
+</tr>
+<tr>
+<td><code>zram=1</code></td>
+<td>Enable ZRAM overlay</td>
+</tr>
+<tr>
+<td><code>checkhash=1</code></td>
+<td>Full rootfs hash verification</td>
+</tr>
+<tr>
+<td><code>initrd_debug=1</code></td>
+<td>Early initramfs shell</td>
+</tr>
+<tr>
+<td><code>initrd_debug=2</code></td>
+<td>Storage &amp; integrity shell</td>
+</tr>
+<tr>
+<td><code>initrd_debug=3</code></td>
+<td>Pre-switch_root shell</td>
+</tr>
+<tr>
+<td><code>debug=1</code></td>
+<td>Kernel debug</td>
+</tr>
+<tr>
+<td><code>loglevel=7</code></td>
+<td>Maximum kernel verbosity</td>
+</tr>
+<tr>
+<td><code>nomodeset</code></td>
+<td>Disable KMS</td>
+</tr>
+</table>
 <hr>
-
 <h2>Boot Flow Summary</h2>
 <pre>
 Firmware (BIOS/UEFI)
@@ -175,19 +295,16 @@ GRUB
         ↓
 Linux Kernel
         ↓
-initramfs
+μinit (/init)  ← MODE = netinstall | embedded | disk | live
         ↓
-(optional) ZRAM overlay (zram=1)
+profile library (/lib/init-*.sh)
         ↓
-(optional) Ventoy ISO detection
+runtime phases (/libexec/10-… → 99-…)
         ↓
-(optional) rootfs verification (checkhash=1)
-        ↓
-(optional) live-config (neoconfig=1)
-        ↓
-switch_root
-        ↓
-init system (systemd or /sbin/init)
+live / disk      → (optional) ZRAM, Ventoy, checkhash, live-config
+                 → switch_root → systemd
+netinstall       → DHCP / WiFi / NTP / Dropbear → interactive shell
+embedded         → DHCP / WiFi / NTP / Dropbear → interactive shell
 </pre>
 
 </main>

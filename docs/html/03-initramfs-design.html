@@ -9,96 +9,221 @@
 <h1>Initramfs Design</h1>
 
 <h2>Purpose of the Initramfs</h2>
-
 <p>
-The initramfs is not a mini-root filesystem intended to stay alive.
-Its only job is to:
+The initramfs is not a mini-root filesystem intended to stay alive. Its only job is to:
 </p>
-
 <ul>
   <li>Detect boot media</li>
-  <li>Mount the real root filesystem</li>
-  <li>Hand control to the real init system</li>
+  <li>Prepare the real root filesystem (or the recovery environment)</li>
+  <li>Hand control to the real init system — or to an interactive shell for</li>
 </ul>
-
+<p>
+netinstall/embedded profiles
+</p>
 <p>
 Everything else is intentionally minimal.
 </p>
-
+<h2>Single <code>/init</code>, Multiple Profiles</h2>
+<p>
+The project no longer ships a separate init per mode. A single orchestrator (<code>initramfs/init</code>, the <strong>μinit</strong>) resolves the boot mode at runtime and loads the matching profile library:
+</p>
+<pre>
+/init                     orchestrator (mode detection + phase loop)
+/usr/lib/init-common.sh   shared colours, run_shell, emergency_shell, banner
+/usr/lib/init-live.sh     live profile  (overlay, scan, ventoy, squashfs)
+/usr/lib/init-net.sh      netinstall profile (DHCP, WiFi, NTP, dropbear)
+/usr/lib/init-disk.sh     disk profile   (udev, raid/lvm, resume, mount root)
+/usr/lib/init-embedded.sh embedded sysroot profile (red + shell + fs tools)
+/libexec/10-mount-basic   runtime phases, sourced in lexical order
+…
+/libexec/99-hooks
+</pre>
+<p>
+<code>mkinitramfs</code> copies <code>init</code>, <code>lib/</code> and <code>libexec/</code> into <strong>every</strong> profile, so live, netinstall, disk and embedded share the same boot logic. There is no second, standalone disk init anymore.
+</p>
+<h3>Profile selection</h3>
+<table border="1" cellspacing="0" cellpadding="4">
+<tr>
+<th>Mode</th>
+<th>Libraries sourced</th>
+<th><code>PROFILE_REQUIRES</code></th>
+</tr>
+<tr>
+<td><code>live</code></td>
+<td><code>init-live.sh</code></td>
+<td><code>mkfs.ext4 fsck.ext4 zstd btrfs mkfs.btrfs</code></td>
+</tr>
+<tr>
+<td><code>netinstall</code></td>
+<td><code>init-live.sh</code> + <code>init-net.sh</code></td>
+<td><code>bash dropbear dropbearkey wpa_supplicant wpa_cli wpa_passphrase zstd btrfs mkfs.btrfs mkfs.ext4 fsck.ext4</code></td>
+</tr>
+<tr>
+<td><code>disk</code></td>
+<td><code>init-disk.sh</code></td>
+<td><em>(empty — no-op)</em></td>
+</tr>
+<tr>
+<td><code>embedded</code></td>
+<td><code>init-embedded.sh</code></td>
+<td>same as <code>netinstall</code></td>
+</tr>
+</table>
+<p>
+<code>PROFILE_REQUIRES</code> is a plain <code>PROFILE_REQUIRES=&quot;…&quot;</code> line at the top of each profile library. <code>mkinitramfs</code> reads it and installs those static binaries from <code>--tools-dir</code> into <code>/usr/bin</code> of the initramfs.
+</p>
+<h3>Mode detection</h3>
+<p>
+<code>/init</code> resolves <code>MODE</code> from, in order:
+</p>
+<ol>
+  <li><code>netinstall=1</code> on the kernel command line,</li>
+  <li>the <code>/etc/neonatox-mode</code> marker baked into an embedded sysroot,</li>
+  <li><code>root=</code> (any form) <strong>only when no marker exists</strong>,</li>
+  <li>fallback <code>live</code>.</li>
+</ol>
+<p>
+The precedence guarantees that an embedded image booting with <code>root=/dev/mmcblk0p2</code> stays in <code>embedded</code> instead of being mistaken for <code>disk</code>. See <a href="10-boot-modes.md">Boot Modes</a> for the user-facing view.
+</p>
+<h2>Runtime Phase Contract</h2>
+<p>
+Phases live in <code>initramfs/libexec/</code> and are <strong>sourced</strong> (<code>.</code>) by <code>/init</code>, not executed as subprocesses. They share the parent shell, so:
+</p>
+<ul>
+  <li><code>$1</code> is <code>$MODE</code> (<code>live</code>, <code>netinstall</code>, <code>disk</code>, <code>embedded</code>).</li>
+  <li>They must <code>return 0</code> on success; any other value triggers</li>
+</ul>
+<p>
+<code>emergency_shell &quot;Phase &lt;name&gt; failed&quot;</code>.
+</p>
+<ul>
+  <li>They may <code>exec</code> to terminate the boot flow (e.g. <code>60-switch-root</code>).</li>
+  <li>Variables set by a phase are visible to later phases.</li>
+</ul>
+<table border="1" cellspacing="0" cellpadding="4">
+<tr>
+<th>Phase</th>
+<th>Profiles</th>
+<th>Responsibility</th>
+</tr>
+<tr>
+<td><code>10-mount-basic</code></td>
+<td>all</td>
+<td>proc/sys/devpts/run, devtmpfs (disk) or <code>mdev -s</code>, loop nodes</td>
+</tr>
+<tr>
+<td><code>20-load-modules</code></td>
+<td>all</td>
+<td><code>modprobe</code> filesystems, media, USB/NVMe/HID; network + WiFi for netinstall/embedded</td>
+</tr>
+<tr>
+<td><code>30-scan-devices</code></td>
+<td>live</td>
+<td>integrity check, Ventoy detection, block device scan</td>
+</tr>
+<tr>
+<td><code>40-overlay</code></td>
+<td>live</td>
+<td>zram overlay, squashfs, overlayfs, live config, new root</td>
+</tr>
+<tr>
+<td><code>50-network</code></td>
+<td>netinstall, embedded</td>
+<td>DHCP, WiFi, NTP, SSH</td>
+</tr>
+<tr>
+<td><code>60-switch-root</code></td>
+<td>all</td>
+<td><code>switch_root</code> (live/disk) or <code>run_shell</code> (netinstall/embedded)</td>
+</tr>
+<tr>
+<td><code>99-hooks</code></td>
+<td>all</td>
+<td>source user runtime hooks from <code>/libexec/99-hooks.d/*</code></td>
+</tr>
+</table>
+<h2>Build-Time Hooks</h2>
+<p>
+<code>mkinitramfs</code> exposes four hook phases; each hook is an executable POSIX script called with the initramfs work directory (<code>$WDIR</code>) and the environment variables <code>TOOLS_DIR</code>, <code>NEONATOX_DIR</code>, <code>PROFILE</code>, <code>EXTRA_DIR</code>:
+</p>
+<table border="1" cellspacing="0" cellpadding="4">
+<tr>
+<th>Phase</th>
+<th>When</th>
+</tr>
+<tr>
+<td><code>pre-binaries</code></td>
+<td>after the basic tree exists, before binaries</td>
+</tr>
+<tr>
+<td><code>post-binaries</code></td>
+<td>after binaries + <code>PROFILE_REQUIRES</code>, before kernel modules</td>
+</tr>
+<tr>
+<td><code>pre-pack</code></td>
+<td>after binaries and modules, before <code>cpio</code></td>
+</tr>
+<tr>
+<td><code>pre-microcode</code></td>
+<td>before prepending the CPU microcode</td>
+</tr>
+</table>
+<p>
+The canonical contract lives in <a href="../HOOKS-AND-PHASES.md"><code>HOOKS-AND-PHASES.md</code></a>.
+</p>
 <h2>Why BusyBox</h2>
-
 <p>
 BusyBox is used because:
 </p>
-
 <ul>
   <li>It provides a predictable shell environment</li>
   <li>It avoids dependency chains</li>
   <li>It keeps the initramfs small and deterministic</li>
 </ul>
-
 <p>
-Importantly, BusyBox does <strong>not</strong> provide a full device manager.
-This is a design choice, not a limitation.
+Importantly, BusyBox does <strong>not</strong> provide a full device manager. This is a design choice, not a limitation.
 </p>
-
 <h2>/dev Handling Strategy</h2>
-
 <p>
-One of the most critical lessons learned during development was that
-device management must be staged.
+One of the most critical lessons learned during development was that device management must be staged.
 </p>
-
 <h3>What Was Tried (and Failed)</h3>
-
 <ul>
   <li>Mounting devtmpfs too early</li>
   <li>Relying on hotplug helpers</li>
   <li>Expecting /dev to populate automatically</li>
 </ul>
-
 <p>
 These approaches resulted in:
 </p>
-
 <ul>
   <li>Missing block devices</li>
   <li>Broken dbus later in systemd</li>
   <li>Non-interactive consoles</li>
 </ul>
-
 <h3>The Working Model</h3>
-
 <p>
 Neonatox Live Boot uses:
 </p>
-
 <ul>
-  <li>Static device nodes created at build time</li>
-  <li>devtmpfs only when preparing the final root</li>
-  <li>mdev only for minimal rescans</li>
+  <li>devtmpfs for the <code>disk</code> profile (matching classic initramfs behaviour)</li>
+  <li><code>mdev -s</code> for live, netinstall and embedded profiles</li>
+  <li>explicit <code>/dev/loop*</code> nodes created by <code>10-mount-basic</code></li>
 </ul>
-
 <p>
 This ensures that:
 </p>
-
 <ul>
   <li>/dev is usable before systemd starts</li>
   <li>systemd can take full control later</li>
 </ul>
-
 <h2>Why /proc/sys/kernel/hotplug Is Not Used</h2>
-
 <p>
-Modern kernels no longer rely on <code>/proc/sys/kernel/hotplug</code>.
-Attempting to use it results in:
+Modern kernels no longer rely on <code>/proc/sys/kernel/hotplug</code>. Attempting to use it results in:
 </p>
-
 <pre>
 sh: /proc/sys/kernel/hotplug: No such file or directory
 </pre>
-
 <p>
 This project intentionally avoids legacy hotplug mechanisms.
 </p>

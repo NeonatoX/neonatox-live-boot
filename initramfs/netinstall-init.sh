@@ -1,6 +1,5 @@
 #!/bin/sh
 PATH=/sbin:/bin:/usr/bin:/usr/sbin
-NLB_VERSION="v0.9"
 
 # netinstall-init.sh — DEPRECATED
 # Desde v0.10 el init unificado (initramfs/init + lib/ + libexec/) cubre el
@@ -90,7 +89,7 @@ show_guide() {
     echo ""
 }
 
-echo -e "${YELLOW}========${NC} ${GREEN}Neonatox Live Boot - Net Install - ${NLB_VERSION} Carlos Sanchez - 2007-2026 ${YELLOW}========${NC}"
+echo -e "${YELLOW}========${NC} ${GREEN}Neonatox Live Boot - Net Install (DEPRECATED) Carlos Sanchez - 2007-2026 ${YELLOW}========${NC}"
 echo -e "${YELLOW}==========${NC} https://github.com/cargabsj175/neonatox-live-boot ${YELLOW}=========${NC}"
 
 # --------------------------------------------------
