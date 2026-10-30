@@ -1,5 +1,4 @@
-[ "${1:-live}" != "live" ] && [ "${1:-live}" != "disk" ] && return 0
-[ "${1:-live}" = "disk" ] && return 0
+[ "${1:-live}" != "live" ] && return 0
 
 check_rootfs_hash || return 1
 
