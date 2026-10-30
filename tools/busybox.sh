@@ -26,6 +26,9 @@ fi
 
 cd busybox
 
+# Ensure source version matches config (1.37.0)
+git checkout -f 1_37_0 >/dev/null 2>&1 || true
+
 cp ../busybox-config .config
 echo -e "${YELLOW}[INFO]${NC} Configuration copied"
 
@@ -33,6 +36,12 @@ echo -e "${YELLOW}[INFO]${NC} Configuration copied"
 # Force static
 # ----------------------------------------------------------
 sed -i 's/.*CONFIG_STATIC.*/CONFIG_STATIC=y/' .config || true
+# Disable kbd_mode to avoid linux/kd.h dependency
+sed -i 's/^CONFIG_KBD_MODE=y/CONFIG_KBD_MODE=n/' .config || true
+# Disable console tools that require linux/kd.h for musl build
+for opt in CONFIG_LOADFONT CONFIG_SETFONT CONFIG_SHOWKEY CONFIG_LOADKMAP CONFIG_DUMPKMAP CONFIG_SETKEYCODES CONFIG_BEEP CONFIG_FLASH_ERASEALL CONFIG_FLASH_LOCK CONFIG_FLASH_UNLOCK CONFIG_FLASHCP CONFIG_NANDWRITE CONFIG_NANDDUMP CONFIG_UBIATTACH CONFIG_UBIDETACH CONFIG_UBIMKVOL CONFIG_UBIRMVOL CONFIG_UBIRSVOL CONFIG_UBIUPDATEVOL CONFIG_UBIRENAME; do
+    sed -i "s/^${opt}=y/${opt}=n/" .config || true
+done
 
 # Cross: set cross compiler prefix in the config
 if [ -n "$CROSS_ARCH" ]; then
@@ -51,9 +60,9 @@ JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 
 if [ -n "$CROSS_ARCH" ]; then
     KBUILD_ARCH="$(kbuild_arch)"
-    make ARCH="$KBUILD_ARCH" CROSS_COMPILE="$CROSS_PREFIX" CC="$MUSLGCC" -j"$JOBS"
+    make ARCH="$KBUILD_ARCH" CROSS_COMPILE="$CROSS_PREFIX" CC="$MUSLGCC" CFLAGS="-static -Os -fno-link-libatomic -isystem $TOOLS_DIR/lib/kernel-headers" -j"$JOBS"
 else
-    make CC="$MUSLGCC" -j"$JOBS"
+    make CC="$MUSLGCC" CFLAGS="-static -Os -fno-link-libatomic -isystem $TOOLS_DIR/lib/kernel-headers" -j"$JOBS"
 fi
 
 

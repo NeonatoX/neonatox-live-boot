@@ -118,16 +118,17 @@ build_tool() {
     fi
 
     # Busybox: usar el del sistema si está en PATH (solo nativo, no cross)
-    if [ "$TOOL" = "busybox" ] && [ -z "$CROSS_ARCH" ] && command -v busybox >/dev/null 2>&1; then
-        echo -e "${YELLOW}[INFO]${NC} busybox found in PATH, copying to output..."
-        mkdir -p "$OUT_DIR"
-        cp "$(command -v busybox)" "$OUT_DIR/busybox"
-        BUSYBOX_VER="$("$OUT_DIR/busybox" 2>&1 | head -1 | sed -n 's/.*BusyBox v\([0-9][0-9.]*\).*/\1/p')"
-        echo "${BUSYBOX_VER:-system}" > "$OUT_DIR/busybox.version"
-        relax_perms "$OUT_DIR"
-        echo -e "${GREEN}[OK]${NC} busybox ready at $OUT_DIR/busybox"
-        return 0
-    fi
+    # Desactivado para garantizar build musl estático con musl-gcc
+    # if [ "$TOOL" = "busybox" ] && [ -z "$CROSS_ARCH" ] && command -v busybox >/dev/null 2>&1; then
+    #     echo -e "${YELLOW}[INFO]${NC} busybox found in PATH, copying to output..."
+    #     mkdir -p "$OUT_DIR"
+    #     cp "$(command -v busybox)" "$OUT_DIR/busybox"
+    #     BUSYBOX_VER="$("$OUT_DIR/busybox" 2>&1 | head -1 | sed -n 's/.*BusyBox v\([0-9][0-9.]*\).*/\1/p')"
+    #     echo "${BUSYBOX_VER:-system}" > "$OUT_DIR/busybox.version"
+    #     relax_perms "$OUT_DIR"
+    #     echo -e "${GREEN}[OK]${NC} busybox ready at $OUT_DIR/busybox"
+    #     return 0
+    # fi
 
     echo "------------------------------------------------------------"
     echo -e "${BLUE}[BUILD]${NC} $TOOL"
